@@ -1,2 +1,6 @@
 /target
 /cert
+mconnector/node_modules/*
+proto/node_modules/*
+*.DS_Store
+mconnector/build/*
