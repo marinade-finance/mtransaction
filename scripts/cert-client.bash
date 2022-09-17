@@ -1,12 +1,32 @@
 #!/usr/bin/env bash
-set -ex
+set -e
 
 SCRIPT_DIR=$(dirname "$0")
 CERTS="$SCRIPT_DIR/../cert"
 
 mkdir -p "$CERTS"
 
-openssl req -newkey rsa:4096 -nodes -keyout "$CERTS/client-key.pem" -out "$CERTS/client-req.pem" \
-  -subj "/OU=Validator1/CN=Validator1/emailAddress=mx-test-validator-1@marinade.finance"
+CMD="$1"
 
-openssl x509 -req -in "$CERTS/client-req.pem" -days 60 -CA "$CERTS/ca-cert.pem" -CAkey "$CERTS/ca-key.pem" -CAcreateserial -out "$CERTS/client-cert.pem"
+if [[ $CMD == "req" ]]
+then
+  VALIDATOR="$2"
+  if [[ -z "$VALIDATOR" ]]
+  then
+    echo "Usage: $0 req <validator>"
+    exit 1
+  fi
+  openssl req -newkey rsa:4096 -nodes -keyout "$CERTS/client-key.pem" -out "$CERTS/client-req.pem" \
+    -subj "/OU=$VALIDATOR/CN=$VALIDATOR"
+
+  cat "$CERTS/client-req.pem"
+elif [[ $CMD == "sign" ]]
+then
+  openssl req -noout -text -in "$CERTS/client-req.pem"
+  openssl x509 -req -in "$CERTS/client-req.pem" -days 60 -CA "$CERTS/client-ca-cert.pem" -CAkey "$CERTS/client-ca-key.pem" -CAcreateserial -out "$CERTS/client-cert.pem"
+
+  cat "$CERTS/client-cert.pem"
+else
+  echo "Usage: $0 <req|sign> ..."
+  exit 1
+fi

@@ -4,7 +4,7 @@ cert-server:
 	./scripts/cert-server.bash
 
 cert-client:
-	./scripts/cert-client.bash
+	./scripts/cert-client.bash $(cmd) $(validator)
 
 build-server:
 	cargo build

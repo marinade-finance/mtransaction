@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-set -ex
+set -e
 
 SCRIPT_DIR=$(dirname "$0")
 CERTS="$SCRIPT_DIR/../cert"
 
 mkdir -p "$CERTS"
+
+openssl req -x509 -newkey rsa:4096 -days 3650 -nodes -keyout "$CERTS/client-ca-key.pem" -out "$CERTS/client-ca-cert.pem" \
+  -subj "/CN=Marinade Test Client CA/OU=Mariande/emailAddress=test-mtx@marinade.finance"
 
 openssl req -x509 -newkey rsa:4096 -days 3650 -nodes -keyout "$CERTS/ca-key.pem" -out "$CERTS/ca-cert.pem" \
   -subj "/CN=Marinade Test CA/OU=Mariande/emailAddress=test-mtx@marinade.finance"

@@ -17,7 +17,8 @@ make run-server
 ## Client
 Generate certificate:
 ```bash
-make cert-client
+make cert-client cmd=req validator=Validator1
+make cert-client cmd=sign
 ```
 
 ## Tester

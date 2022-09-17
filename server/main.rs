@@ -101,8 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tls_config(tls)?
         .add_service(pb::m_transaction_server::MTransactionServer::new(server))
         .serve(addr)
-        .await
-        .unwrap();
+        .await?;
 
     info!("Exiting.");
 
