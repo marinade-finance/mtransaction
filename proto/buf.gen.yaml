@@ -1,0 +1,12 @@
+version: v1beta1
+plugins:
+  - name: js
+    out: ../mconnector/src/proto
+    opt: import_style=commonjs,binary
+  - name: grpc
+    out: ../mconnector/src/proto
+    opt: grpc_js
+    path: grpc_tools_node_protoc_ts
+  - name: ts
+    out: ../mconnector/src/proto
+    opt: grpc_js
