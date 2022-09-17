@@ -5,10 +5,20 @@ TBD
 TBD
 
 ## Server
-TBD
+Generate certificate:
+```bash
+make cert-server
+```
+Run:
+```
+make run-server
+```
 
 ## Client
-TBD
+Generate certificate:
+```bash
+make cert-client
+```
 
 ## Tester
 TBD
