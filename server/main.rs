@@ -8,7 +8,8 @@ use log::{debug, error, info};
 use std::{error::Error, io::ErrorKind, net::ToSocketAddrs, pin::Pin, time::Duration};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-use tonic::{transport::Server, Request, Response, Status, Streaming};
+use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
+use tonic::{Request, Response, Status, Streaming};
 
 use pb::{EchoRequest, EchoResponse};
 
@@ -85,11 +86,21 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
+    info!("Loading server certificate...");
+    let cert = tokio::fs::read("./cert/server-cert.pem").await?;
+    let key = tokio::fs::read("./cert/server-key.pem").await?;
+    let server_identity = Identity::from_pem(cert, key);
+
+    let tls = ServerTlsConfig::new().identity(server_identity);
+    // .client_ca_root(client_ca_cert);
+
     info!("Launching the server.");
+    let addr = "0.0.0.0:50051".parse().unwrap();
     let server = MTransactionServer {};
     Server::builder()
+        .tls_config(tls)?
         .add_service(pb::m_transaction_server::MTransactionServer::new(server))
-        .serve("0.0.0.0:50051".to_socket_addrs().unwrap().next().unwrap())
+        .serve(addr)
         .await
         .unwrap();
 
