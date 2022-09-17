@@ -1,9 +1,12 @@
 pub mod pb {
     tonic::include_proto!("validator");
 }
+pub mod rpc_server;
 
+use crate::rpc_server::*;
 use env_logger::Env;
 use futures::Stream;
+use jsonrpc_http_server::*;
 use log::{debug, error, info};
 use std::{error::Error, io::ErrorKind, net::ToSocketAddrs, pin::Pin, time::Duration};
 use tokio::sync::mpsc;
@@ -13,8 +16,9 @@ use tonic::{Request, Response, Status, Streaming};
 
 use pb::{EchoRequest, EchoResponse};
 
-type EchoResult<T> = Result<Response<T>, Status>;
-type EchoResponseStream = Pin<Box<dyn Stream<Item = Result<EchoResponse, Status>> + Send>>;
+type EchoResult<T> = std::result::Result<Response<T>, Status>;
+type EchoResponseStream =
+    Pin<Box<dyn Stream<Item = std::result::Result<EchoResponse, Status>> + Send>>;
 
 fn match_for_io_error(err_status: &Status) -> Option<&std::io::Error> {
     let mut err: &(dyn Error + 'static) = err_status;
@@ -62,7 +66,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
         let (tx, rx) = mpsc::channel(128);
         tokio::spawn(async move {
             while let Some(item) = stream.next().await {
-                match tx.send(Result::<_, Status>::Ok(item)).await {
+                match tx.send(std::result::Result::<_, Status>::Ok(item)).await {
                     Ok(_) => {
                         // item (server response) was queued to be send to client
                     }
@@ -83,24 +87,33 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let grpc_addr = "0.0.0.0:50051".parse().unwrap();
+    let rpc_addr = "0.0.0.0:3000".parse().unwrap();
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    info!("Loading server certificate...");
+    info!("Spawning RPC server.");
+    let rpc_server = ServerBuilder::new(get_io_handler())
+        .start_http(&rpc_addr)
+        .expect("Unable to start TCP RPC server");
+
+    info!("Loading server certificate.");
     let cert = tokio::fs::read("./cert/server-cert.pem").await?;
     let key = tokio::fs::read("./cert/server-key.pem").await?;
     let server_identity = Identity::from_pem(cert, key);
 
+    let client_ca_cert = tokio::fs::read("./cert/client-ca-cert.pem").await?;
+    let client_ca_cert = Certificate::from_pem(client_ca_cert);
+
     let tls = ServerTlsConfig::new().identity(server_identity);
     // .client_ca_root(client_ca_cert);
 
-    info!("Launching the server.");
-    let addr = "0.0.0.0:50051".parse().unwrap();
+    info!("Spawning the gRPC server.");
     let server = MTransactionServer {};
     Server::builder()
         .tls_config(tls)?
         .add_service(pb::m_transaction_server::MTransactionServer::new(server))
-        .serve(addr)
+        .serve(grpc_addr)
         .await?;
 
     info!("Exiting.");
