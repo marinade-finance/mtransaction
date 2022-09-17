@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package validator;
+
+// The MTransaction service definition.
+service MTransaction {
+  // Sends message to be echoed back
+  rpc Echo (EchoRequest) returns (EchoReply) {}
+}
+
+// The request message
+message EchoRequest {
+  string message = 1;
+}
+
+// The response message
+message EchoReply {
+  string message = 1;
+}
