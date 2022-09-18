@@ -10,8 +10,12 @@ Generate certificate:
 make cert-server
 ```
 Run:
-```
+```bash
 make run-server
+```
+Send transaction:
+```bash
+curl localhost:3000 -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "send_transaction", "id":123 }'
 ```
 
 ## Client
