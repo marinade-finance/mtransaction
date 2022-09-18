@@ -15,6 +15,14 @@ pub struct RpcVersionInfo {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RpcContextConfig {
+    #[serde(flatten)]
+    pub commitment: Option<String>,
+    pub min_context_slot: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RpcSendTransactionConfig {
     #[serde(default)]
     pub skip_preflight: bool,
@@ -32,8 +40,12 @@ pub trait Rpc {
         data: String,
         config: Option<RpcSendTransactionConfig>,
     ) -> Result<String>;
+
     #[rpc(name = "getVersion")]
     fn get_version(&self) -> Result<RpcVersionInfo>;
+
+    #[rpc(name = "getLatestBlockhash")]
+    fn get_latest_blockhash(&self, config: Option<RpcContextConfig> ) -> Result<String>;
 }
 #[derive(Default)]
 pub struct RpcServer;
@@ -47,12 +59,18 @@ impl Rpc for RpcServer {
         info!("RPC method sendTransaction called.");
         Ok("this went well".to_string())
     }
+
     fn get_version(&self) -> Result<RpcVersionInfo> {
         info!("RPC method getVersion called.");
         Ok(RpcVersionInfo {
             solana_core: "1.10.38".to_string(),
             feature_set: None,
         })
+    }
+
+    fn get_latest_blockhash(&self, config: Option<RpcContextConfig> ) -> Result<String> {
+        info!("RPC method getLatestBlockhash called.");
+        Ok("blockhash".to_string())
     }
 }
 
