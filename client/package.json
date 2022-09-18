@@ -1,0 +1,9 @@
+{
+  "name": "mconnector",
+  "version": "1.0.0",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.7.0",
+    "@grpc/proto-loader": "^0.7.2",
+    "path": "^0.12.7"
+  }
+}
