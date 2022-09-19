@@ -8,6 +8,7 @@ use env_logger::Env;
 use futures::Stream;
 use jsonrpc_http_server::*;
 use log::{debug, error, info};
+use rand::Rng;
 use std::{error::Error, io::ErrorKind, net::ToSocketAddrs, pin::Pin, time::Duration};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
@@ -51,16 +52,23 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
     async fn echo(&self, req: Request<EchoRequest>) -> EchoResult<EchoResponse> {
         let message = req.into_inner().message;
         info!("Echo called with {}", &message);
-        Ok(Response::new(EchoResponse { message }))
+        Ok(Response::new(EchoResponse {
+            message: format!("{} is best", message),
+        }))
     }
 
     type EchoStreamStream = EchoResponseStream;
     async fn echo_stream(&self, req: Request<EchoRequest>) -> EchoResult<Self::EchoStreamStream> {
         info!("Client connected: {:?}.", req.remote_addr());
+        let mut rng = rand::thread_rng();
+        let count = rng.gen_range(3..10);
 
         let message = req.into_inner().message;
         info!("Echo stream called with {}", &message);
-        let repeat = std::iter::repeat(EchoResponse { message });
+        let repeat = std::iter::repeat(EchoResponse {
+            message: format!("{} is best", message),
+        })
+        .take(count);
         let mut stream = Box::pin(tokio_stream::iter(repeat).throttle(Duration::from_millis(200)));
 
         let (tx, rx) = mpsc::channel(128);
@@ -68,6 +76,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
             while let Some(item) = stream.next().await {
                 match tx.send(std::result::Result::<_, Status>::Ok(item)).await {
                     Ok(_) => {
+                        info!("Message sent");
                         // item (server response) was queued to be send to client
                     }
                     Err(_item) => {
@@ -97,21 +106,22 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .start_http(&rpc_addr)
         .expect("Unable to start TCP RPC server");
 
-    info!("Loading server certificate.");
-    let cert = tokio::fs::read("./cert/server-cert.pem").await?;
-    let key = tokio::fs::read("./cert/server-key.pem").await?;
-    let server_identity = Identity::from_pem(cert, key);
-
-    let client_ca_cert = tokio::fs::read("./cert/client-ca-cert.pem").await?;
-    let client_ca_cert = Certificate::from_pem(client_ca_cert);
-
-    let tls = ServerTlsConfig::new().identity(server_identity);
-    // .client_ca_root(client_ca_cert);
+    // info!("Loading server certificate.");
+    // let cert = tokio::fs::read("./cert/server-cert.pem").await?;
+    // let key = tokio::fs::read("./cert/server-key.pem").await?;
+    // let server_identity = Identity::from_pem(cert, key);
+    //
+    // let client_ca_cert = tokio::fs::read("./cert/client-ca-cert.pem").await?;
+    // let client_ca_cert = Certificate::from_pem(client_ca_cert);
+    //
+    // let tls = ServerTlsConfig::new()
+    //     .identity(server_identity)
+    //     .client_ca_root(client_ca_cert);
 
     info!("Spawning the gRPC server.");
     let server = MTransactionServer {};
     Server::builder()
-        .tls_config(tls)?
+        // .tls_config(tls)?
         .add_service(pb::m_transaction_server::MTransactionServer::new(server))
         .serve(grpc_addr)
         .await?;
