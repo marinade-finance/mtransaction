@@ -25,6 +25,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
 serde_json = "1.0"
 rand = "0.8.5"
+structopt = "0.3.21"
 
 [build-dependencies]
 tonic-build = { version = "0.8.0", features = ["prost"] }

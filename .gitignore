@@ -1,5 +1,5 @@
 /target
-/cert
+/certs
 *.DS_Store
 demo/node_modules/*
 client/node_modules/*

@@ -12,7 +12,9 @@ build-server:
 build-all: build-server
 
 run-server: build-server
-	cargo run --bin mtx-server
+	cargo run --bin mtx-server -- \
+		--tls-grpc-server-cert ./certs/localhost.cert \
+		--tls-grpc-server-key  ./certs/localhost.key
 
 clean:
 	rm -rf target cert
