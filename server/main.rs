@@ -106,22 +106,21 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .start_http(&rpc_addr)
         .expect("Unable to start TCP RPC server");
 
-    // info!("Loading server certificate.");
-    // let cert = tokio::fs::read("./cert/server-cert.pem").await?;
-    // let key = tokio::fs::read("./cert/server-key.pem").await?;
-    // let server_identity = Identity::from_pem(cert, key);
+    info!("Loading server certificate.");
+    let cert = tokio::fs::read("/var/local/backend.cert").await?;
+    let key = tokio::fs::read("/var/local/backend.key").await?;
+    let server_identity = Identity::from_pem(cert, key);
     //
     // let client_ca_cert = tokio::fs::read("./cert/client-ca-cert.pem").await?;
     // let client_ca_cert = Certificate::from_pem(client_ca_cert);
     //
-    // let tls = ServerTlsConfig::new()
-    //     .identity(server_identity)
+    let tls = ServerTlsConfig::new().identity(server_identity);
     //     .client_ca_root(client_ca_cert);
 
     info!("Spawning the gRPC server.");
     let server = MTransactionServer {};
     Server::builder()
-        // .tls_config(tls)?
+        .tls_config(tls)?
         .add_service(pb::m_transaction_server::MTransactionServer::new(server))
         .serve(grpc_addr)
         .await?;

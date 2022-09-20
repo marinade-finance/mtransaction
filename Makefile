@@ -12,7 +12,7 @@ build-server:
 build-all: build-server
 
 run-server: build-server
-	cargo run --bin mtransaction-server
+	cargo run --bin mtx-server
 
 clean:
 	rm -rf target cert

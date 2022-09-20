@@ -24,7 +24,12 @@ Generate certificate:
 make cert-client cmd=req validator=Validator1
 make cert-client cmd=sign
 ```
-
+Get server certificate:
+```bash
+export HOST=mtx-dev-eu-central-1.marinade.finance
+export PORT=443
+echo -n | openssl s_client -connect $HOST:$PORT | openssl x509 > /tmp/$HOST.cert
+```
 ## Tester
 TBD
 
