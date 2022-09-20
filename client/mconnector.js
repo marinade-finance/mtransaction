@@ -1,34 +1,35 @@
-var grpc = require('@grpc/grpc-js');
-// const fs = require('fs');
+const fs = require('fs');
 
-var path = require("path");
-var PROTO_PATH = path.join(__dirname, '..', 'proto', 'mtransaction.proto');
+const path = require("path");
+const PROTO_PATH = path.join(__dirname, '..', 'proto', 'mtransaction.proto');
 
-var protoLoader = require('@grpc/proto-loader');
-var packageDefinition = protoLoader.loadSync(
-    PROTO_PATH,
-    {keepCase: true,
-     longs: String,
-     enums: String,
-     defaults: true,
-     oneofs: true
+const protoLoader = require('@grpc/proto-loader');
+const packageDefinition = protoLoader.loadSync(PROTO_PATH, {keepCase: true});
+
+const grpc = require('@grpc/grpc-js');
+const validatorProto = grpc.loadPackageDefinition(packageDefinition).validator;
+
+function connect() {
+    const ssl_creds = grpc.credentials.createSsl(
+        fs.readFileSync(path.join(__dirname, '..', 'cert', 'mtx-dev-eu-central-1.marinade.finance.cert')), 
+        fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-key.cer')), 
+        fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-cert.cer')),
+    );
+    const mtransactionClient = new validatorProto.MTransaction(`mtx-dev-eu-central-1.marinade.finance:50051`, ssl_creds);
+    const call = mtransactionClient.EchoStream({message: 'Listening for transactions'}, (err, message) => {
+        console.log(err, message);
     });
-var validator_proto = grpc.loadPackageDefinition(packageDefinition).validator;
+    call.on('data', (response) => {
+        console.log(response);
+    });
+    call.on('end',function(){
+        console.log("Stream ended")
+        connect();
+    });
+}
 
 function main() {
-    // const ssl_creds = grpc.credentials.createSsl(
-    //     fs.readFileSync(path.join(__dirname, '..', 'cert', 'ca-cert.cer')),
-    //     fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-key.cer')),
-    //     fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-cert.cer')),
-    // );
-    // var client = new validator_proto.MTransaction('192.168.200.176:50051', ssl_creds);
-    var client = new validator_proto.MTransaction('192.168.200.176:50051', grpc.credentials.createInsecure());
-
-    client.EchoStream({message: 'world'}, function(err, response) {
-        if (err) throw err;
-        console.log('Greeting:', response.message);
-        // client.close();
-    });
+    connect();
 }
 
 main();
