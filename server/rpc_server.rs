@@ -1,82 +1,81 @@
+use crate::balancer::*;
 use jsonrpc_core::futures::future;
-use jsonrpc_core::{BoxFuture, IoHandler, Result};
+use jsonrpc_core::{BoxFuture, MetaIoHandler, Metadata, Result};
 use jsonrpc_derive::rpc;
+use jsonrpc_http_server::*;
 use log::{debug, error, info};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct RpcVersionInfo {
-    /// The current version of solana-core
-    pub solana_core: String,
-    /// first 4 bytes of the FeatureSet identifier
-    pub feature_set: Option<u32>,
+#[derive(Clone)]
+pub struct RpcMetadata {
+    balancer: Arc<RwLock<Balancer>>,
 }
+impl Metadata for RpcMetadata {}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RpcContextConfig {
-    #[serde(flatten)]
-    pub commitment: Option<String>,
-    pub min_context_slot: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RpcSendTransactionConfig {
+pub struct SendPriorityTransactionConfig {
     #[serde(default)]
     pub skip_preflight: bool,
     pub preflight_commitment: Option<String>,
-    pub encoding: Option<String>,
-    pub max_retries: Option<usize>,
     pub min_context_slot: Option<u64>,
 }
 
-#[rpc(server)]
+#[rpc]
 pub trait Rpc {
-    #[rpc(name = "sendTransaction")]
-    fn send_transaction(
+    type Metadata;
+
+    #[rpc(meta, name = "sendPriorityTransaction")]
+    fn send_priority_transaction(
         &self,
+        meta: Self::Metadata,
         data: String,
-        config: Option<RpcSendTransactionConfig>,
-    ) -> Result<String>;
-
-    #[rpc(name = "getVersion")]
-    fn get_version(&self) -> Result<RpcVersionInfo>;
-
-    #[rpc(name = "getLatestBlockhash")]
-    fn get_latest_blockhash(&self, config: Option<RpcContextConfig> ) -> Result<String>;
+        config: Option<SendPriorityTransactionConfig>,
+    ) -> BoxFuture<Result<()>>;
 }
+
 #[derive(Default)]
 pub struct RpcServer;
-
 impl Rpc for RpcServer {
-    fn send_transaction(
+    type Metadata = RpcMetadata;
+
+    fn send_priority_transaction(
         &self,
+        meta: Self::Metadata,
         data: String,
-        config: Option<RpcSendTransactionConfig>,
-    ) -> Result<String> {
+        config: Option<SendPriorityTransactionConfig>,
+    ) -> BoxFuture<Result<()>> {
         info!("RPC method sendTransaction called.");
-        Ok("this went well".to_string())
-    }
-
-    fn get_version(&self) -> Result<RpcVersionInfo> {
-        info!("RPC method getVersion called.");
-        Ok(RpcVersionInfo {
-            solana_core: "1.10.38".to_string(),
-            feature_set: None,
+        // balancer.send_tx(data).await?;
+        Box::pin(async move {
+            send_tx(meta.balancer, data).await;
+            Ok(())
         })
-    }
-
-    fn get_latest_blockhash(&self, config: Option<RpcContextConfig> ) -> Result<String> {
-        info!("RPC method getLatestBlockhash called.");
-        Ok("blockhash".to_string())
     }
 }
 
-pub fn get_io_handler() -> IoHandler {
-    let mut io = IoHandler::new();
+pub fn get_io_handler() -> MetaIoHandler<RpcMetadata> {
+    let mut io = MetaIoHandler::default();
     io.extend_with(RpcServer::default().to_delegate());
 
     io
+}
+
+pub fn spawn_rpc_server(rpc_addr: std::net::SocketAddr, balancer: Arc<RwLock<Balancer>>) -> Server {
+    info!("Spawning RPC server.");
+
+    ServerBuilder::with_meta_extractor(
+        get_io_handler(),
+        move |_req: &hyper::Request<hyper::Body>| RpcMetadata {
+            balancer: balancer.clone(),
+        },
+    )
+    .cors(DomainsValidation::AllowOnly(vec![
+        AccessControlAllowOrigin::Any,
+    ]))
+    .threads(4)
+    .start_http(&rpc_addr)
+    .expect("Unable to start TCP RPC server")
 }

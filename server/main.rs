@@ -1,15 +1,18 @@
 pub mod pb {
     tonic::include_proto!("validator");
 }
+pub mod balancer;
 pub mod grpc_server;
 pub mod rpc_server;
 
+use crate::balancer::*;
 use crate::grpc_server::*;
 use crate::rpc_server::*;
 use env_logger::Env;
-use jsonrpc_http_server::*;
 use log::info;
+use std::sync::Arc;
 use structopt::StructOpt;
+use tokio::sync::RwLock;
 
 #[derive(Debug, StructOpt)]
 struct Params {
@@ -34,18 +37,16 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let params = Params::from_args();
 
-    let rpc_addr = params.rpc_addr.parse().unwrap();
+    let balancer = Arc::new(RwLock::new(Balancer::new()));
 
-    info!("Spawning RPC server.");
-    let _rpc_server = ServerBuilder::new(get_io_handler())
-        .start_http(&rpc_addr)
-        .expect("Unable to start TCP RPC server");
+    let _rpc_server = spawn_rpc_server(params.rpc_addr.parse().unwrap(), balancer.clone());
 
     spawn_grpc_server(
         params.grpc_addr.parse().unwrap(),
         params.tls_grpc_server_cert,
         params.tls_grpc_server_key,
         params.tls_grpc_client_ca_cert,
+        balancer.clone(),
     )
     .await?;
 
