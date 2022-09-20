@@ -11,9 +11,7 @@ const validatorProto = grpc.loadPackageDefinition(packageDefinition).validator;
 
 function connect() {
     const ssl_creds = grpc.credentials.createSsl(
-        fs.readFileSync(path.join(__dirname, '..', 'cert', 'mtx-dev-eu-central-1.marinade.finance.cert')), 
-        fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-key.cer')), 
-        fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-cert.cer')),
+        fs.readFileSync(path.join(__dirname, '..', 'cert', 'mtx-dev-eu-central-1.marinade.finance.cert')),
     );
     const mtransactionClient = new validatorProto.MTransaction(`mtx-dev-eu-central-1.marinade.finance:50051`, ssl_creds);
     const call = mtransactionClient.EchoStream({message: 'Listening for transactions'}, (err, message) => {
