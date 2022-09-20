@@ -1,4 +1,4 @@
-// const fs = require('fs');
+const fs = require('fs');
 
 const path = require("path");
 const PROTO_PATH = path.join(__dirname, '..', 'proto', 'mtransaction.proto');
@@ -10,8 +10,15 @@ const grpc = require('@grpc/grpc-js');
 const validatorProto = grpc.loadPackageDefinition(packageDefinition).validator;
 
 function connect() {
-    const mtransactionClient = new validatorProto.MTransaction('192.168.200.176:50051', grpc.credentials.createInsecure());
-    const call = mtransactionClient.EchoStream({message: 'Listening for transactions'});
+    const ssl_creds = grpc.credentials.createSsl(
+        fs.readFileSync(path.join(__dirname, '..', 'cert', 'mtx-dev-eu-central-1.marinade.finance.cert')), 
+        fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-key.cer')), 
+        fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-cert.cer')),
+    );
+    const mtransactionClient = new validatorProto.MTransaction(`mtx-dev-eu-central-1.marinade.finance:50051`, ssl_creds);
+    const call = mtransactionClient.EchoStream({message: 'Listening for transactions'}, (err, message) => {
+        console.log(err, message);
+    });
     call.on('data', (response) => {
         console.log(response);
     });
@@ -22,12 +29,6 @@ function connect() {
 }
 
 function main() {
-    // const ssl_creds = grpc.credentials.createSsl(
-    //     fs.readFileSync(path.join(__dirname, '..', 'cert', 'ca-cert.cer')),
-    //     fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-key.cer')),
-    //     fs.readFileSync(path.join(__dirname, '..', 'cert', 'client-cert.cer')),
-    // );
-    // var client = new validator_proto.MTransaction('192.168.200.176:50051', ssl_creds);
     connect();
 }
 
