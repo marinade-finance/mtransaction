@@ -14,11 +14,9 @@ use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 
-use pb::{EchoRequest, EchoResponse};
+use pb::{TxMessage, TxMessageRequest};
 
-type EchoResult<T> = std::result::Result<Response<T>, Status>;
-type EchoResponseStream =
-    Pin<Box<dyn Stream<Item = std::result::Result<EchoResponse, Status>> + Send>>;
+type TxMessageStream = Pin<Box<dyn Stream<Item = std::result::Result<TxMessage, Status>> + Send>>;
 
 pub struct MTransactionServer {
     balancer: Arc<RwLock<Balancer>>,
@@ -26,55 +24,33 @@ pub struct MTransactionServer {
 
 #[tonic::async_trait]
 impl pb::m_transaction_server::MTransaction for MTransactionServer {
-    async fn echo(&self, req: Request<EchoRequest>) -> EchoResult<EchoResponse> {
-        let message = req.into_inner().message;
-        info!("Echo called with {}", &message);
-        Ok(Response::new(EchoResponse {
-            message: format!("{} is best", message),
-        }))
-    }
-
-    type EchoStreamStream = EchoResponseStream;
-    async fn echo_stream(&self, req: Request<EchoRequest>) -> EchoResult<Self::EchoStreamStream> {
+    type TxStreamStream = TxMessageStream;
+    async fn tx_stream(
+        &self,
+        req: Request<TxMessageRequest>,
+    ) -> std::result::Result<Response<Self::TxStreamStream>, Status> {
         let identity = req.remote_addr();
+        // let identity = "test".to_string();
         info!("Client connected: {:?}.", &identity);
 
         let mut balancer = self.balancer.write().await;
-        let mut transactions_rx = balancer.add_tx_consumer(format!("{:?}", &identity));
-
-        let message = req.into_inner().message;
-
-        let (tx, rx) = mpsc::channel(128);
-        {
-            let balancer_cp = self.balancer.clone();
-            let identity = identity.clone();
-            tokio::spawn(async move {
-                while let Some(tx_message) = transactions_rx.recv().await {
-                    match tx
-                        .send(std::result::Result::<_, Status>::Ok(EchoResponse {
-                            message: tx_message.data,
-                        }))
-                        .await
-                    {
-                        Ok(_) => {
-                            info!("Message sent");
-                            // item (server response) was queued to be send to client
-                        }
-                        Err(_item) => {
-                            // output_stream was build from rx and both are dropped
-                            break;
-                        }
-                    }
-                }
-                info!("Client disconnected");
-                let mut balancer = balancer_cp.write().await;
-                balancer.remove_tx_consumer(&format!("{:?}", &identity));
-            });
-        };
-
+        let (tx, rx) = balancer.subscribe(format!("{:?}", &identity));
         let output_stream = ReceiverStream::new(rx);
+
+        {
+            let balancer = self.balancer.clone();
+            tokio::spawn(async move {
+                tx.closed().await;
+                info!("The client has disconnected {:?}", &identity);
+                balancer
+                    .write()
+                    .await
+                    .unsubscribe(&format!("{:?}", &identity));
+            });
+        }
+
         Ok(Response::new(
-            Box::pin(output_stream) as Self::EchoStreamStream
+            Box::pin(output_stream) as Self::TxStreamStream
         ))
     }
 }

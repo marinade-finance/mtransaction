@@ -16,12 +16,7 @@ impl Metadata for RpcMetadata {}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SendPriorityTransactionConfig {
-    #[serde(default)]
-    pub skip_preflight: bool,
-    pub preflight_commitment: Option<String>,
-    pub min_context_slot: Option<u64>,
-}
+pub struct SendPriorityTransactionConfig {}
 
 #[rpc]
 pub trait Rpc {
@@ -48,10 +43,15 @@ impl Rpc for RpcServer {
         config: Option<SendPriorityTransactionConfig>,
     ) -> BoxFuture<Result<()>> {
         info!("RPC method sendTransaction called.");
-        // balancer.send_tx(data).await?;
         Box::pin(async move {
-            send_tx(meta.balancer, data).await;
-            Ok(())
+            match meta.balancer.read().await.publish(data).await {
+                Ok(_) => Ok(()),
+                Err(err) => Err(jsonrpc_core::error::Error {
+                    code: jsonrpc_core::error::ErrorCode::InternalError,
+                    message: "Failed to forward the transaction".into(),
+                    data: None,
+                }),
+            }
         })
     }
 }

@@ -4,19 +4,13 @@ package validator;
 
 // The MTransaction service definition.
 service MTransaction {
-  // Sends message to be echoed back
-  rpc Echo (EchoRequest) returns (EchoResponse) {}
-
   // Sends message to be streamed back
-  rpc EchoStream(EchoRequest) returns (stream EchoResponse) {}
+  rpc TxStream(TxMessageRequest) returns (stream TxMessage) {}
 }
 
-// The request message
-message EchoRequest {
-  string message = 1;
-}
+message TxMessageRequest {}
 
 // The response message
-message EchoResponse {
-  string message = 1;
+message TxMessage {
+  string data = 1;
 }

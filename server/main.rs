@@ -39,6 +39,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let balancer = Arc::new(RwLock::new(Balancer::new()));
 
+    {
+        let balacer_cp = balancer.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        });
+    }
+
     let _rpc_server = spawn_rpc_server(params.rpc_addr.parse().unwrap(), balancer.clone());
 
     spawn_grpc_server(
