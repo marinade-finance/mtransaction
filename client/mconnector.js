@@ -10,15 +10,18 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {keepCase: true});
 const grpc = require('@grpc/grpc-js');
 const validatorProto = grpc.loadPackageDefinition(packageDefinition).validator;
 
-function restart(millisecondsToWait, r, typ) {
-    console.log(r, "Stream ended", millisecondsToWait, typ);
+process.on('uncaughtException', (err) => {
+    console.log('Caught exception: ' + err + err.stack)
+})
+
+function restart(millisecondsToWait, r) {
+    console.log(r, "Stream ended", millisecondsToWait);
     setTimeout(() => {
         connect();
     }, millisecondsToWait);
 }
 
-function connect() {
-    let millisecondsToWait = 500;
+function connect(millisecondsToWait) {
     const r = (Math.random() + 1).toString(36).substring(7);
     const ssl_creds = grpc.credentials.createSsl(
         fs.readFileSync(path.join(__dirname, '..', 'certs', 'localhost.cert')),
@@ -30,12 +33,13 @@ function connect() {
     call.on('data', ({ data }) => {
         const tx = web3.Transaction.populate(web3.Message.from(Buffer.from(data, 'base64')))
         console.log(r, data);
+        millisecondsToWait = 500;
     });
     call.on('end', () => {
         millisecondsToWait += millisecondsToWait;
         mtransactionClient.close();
         console.log(r, "connection end")
-        restart(millisecondsToWait);
+        restart(millisecondsToWait, r);
     });
     call.on('error', (err) => {
         console.error(r, err);
@@ -43,7 +47,7 @@ function connect() {
 }
 
 function main() {
-    connect();
+    connect(500);
 }
 
 main();
