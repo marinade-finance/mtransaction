@@ -1,4 +1,5 @@
 const fs = require('fs');
+const web3 = require('@solana/web3.js')
 
 const path = require("path");
 const PROTO_PATH = path.join(__dirname, '..', 'proto', 'mtransaction.proto');
@@ -11,14 +12,15 @@ const validatorProto = grpc.loadPackageDefinition(packageDefinition).validator;
 
 function connect() {
     const ssl_creds = grpc.credentials.createSsl(
-        fs.readFileSync(path.join(__dirname, '..', 'cert', 'mtx-dev-eu-central-1.marinade.finance.cert')),
+        fs.readFileSync(path.join(__dirname, '..', 'certs', 'localhost.cert')),
     );
-    const mtransactionClient = new validatorProto.MTransaction(`mtx-dev-eu-central-1.marinade.finance`, ssl_creds);
-    const call = mtransactionClient.EchoStream({message: 'Listening for transactions'}, (err, message) => {
+    const mtransactionClient = new validatorProto.MTransaction(`localhost:50051`, ssl_creds);
+    const call = mtransactionClient.TxStream({message: 'Listening for transactions'}, (err, message) => {
         console.log(err, message);
     });
-    call.on('data', (response) => {
-        console.log(response);
+    call.on('data', ({ data }) => {
+        const tx = web3.Transaction.populate(web3.Message.from(Buffer.from(data, 'base64')))
+        console.log(data);
     });
     call.on('end',function(){
         console.log("Stream ended")

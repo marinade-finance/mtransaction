@@ -4,6 +4,7 @@
   "dependencies": {
     "@grpc/grpc-js": "^1.7.0",
     "@grpc/proto-loader": "^0.7.2",
+    "@solana/web3.js": "^1.62.1",
     "path": "^0.12.7"
   }
 }
