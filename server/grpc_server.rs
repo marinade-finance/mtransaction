@@ -4,15 +4,14 @@ pub mod pb {
 use crate::balancer::*;
 use futures::Stream;
 use jsonrpc_http_server::*;
-use log::{debug, error, info, warn};
-use rand::Rng;
+use log::{error, info, warn};
+use std::pin::Pin;
 use std::sync::Arc;
-use std::{error::Error, io::ErrorKind, net::ToSocketAddrs, pin::Pin, time::Duration};
-use structopt::StructOpt;
-use tokio::sync::{mpsc, RwLock};
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio::sync::RwLock;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
-use tonic::{Request, Response, Status, Streaming};
+use tonic::{Request, Response, Status};
+use x509_parser::prelude::*;
 
 use pb::{TxMessage, TxMessageRequest};
 
@@ -22,6 +21,22 @@ pub struct MTransactionServer {
     balancer: Arc<RwLock<Balancer>>,
 }
 
+fn get_identity_from_req(req: &Request<TxMessageRequest>) -> Option<String> {
+    if let Some(certs) = req.peer_certs() {
+        for cert in certs.as_ref() {
+            if let Ok((_, cert)) = X509Certificate::from_der(cert.get_ref()) {
+                for cn in cert.subject().iter_common_name() {
+                    if let Ok(cn) = cn.attr_value().as_str() {
+                        return Some(cn.into());
+                    }
+                }
+            }
+        }
+    }
+
+    return None;
+}
+
 #[tonic::async_trait]
 impl pb::m_transaction_server::MTransaction for MTransactionServer {
     type TxStreamStream = TxMessageStream;
@@ -29,26 +44,42 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
         &self,
         req: Request<TxMessageRequest>,
     ) -> std::result::Result<Response<Self::TxStreamStream>, Status> {
-        let identity = req.remote_addr();
-        // let identity = "test".to_string();
-        info!("Client connected: {:?}.", &identity);
+        let identity = match get_identity_from_req(&req) {
+            Some(identity) => identity,
+            _ => {
+                error!(
+                    "Unable to idetify the client by TLS certificate ({:?}).",
+                    req.remote_addr()
+                );
+                return Err(Status::unauthenticated("Not authenticated!".to_string()));
+            }
+        };
+        info!(
+            "New client connected: {:?} {:?}.",
+            &identity,
+            req.remote_addr()
+        );
 
         let mut balancer = self.balancer.write().await;
-        let (tx, rx) = balancer.subscribe(format!("{:?}", &identity));
-        let output_stream = ReceiverStream::new(rx);
+        let (tx, rx) = if let Some((tx, rx)) = balancer.subscribe(identity.clone()) {
+            (tx, rx)
+        } else {
+            return Err(Status::resource_exhausted(format!(
+                "Client with the same identity {} is already connected!",
+                &identity
+            )));
+        };
 
         {
             let balancer = self.balancer.clone();
             tokio::spawn(async move {
                 tx.closed().await;
                 info!("The client has disconnected {:?}", &identity);
-                balancer
-                    .write()
-                    .await
-                    .unsubscribe(&format!("{:?}", &identity));
+                balancer.write().await.unsubscribe(&identity);
             });
         }
 
+        let output_stream = ReceiverStream::new(rx);
         Ok(Response::new(
             Box::pin(output_stream) as Self::TxStreamStream
         ))
