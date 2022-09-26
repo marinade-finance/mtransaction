@@ -30,6 +30,7 @@ structopt = "0.3.21"
 solana-sdk = "1.7.11"
 solana-client = "1.7.11"
 x509-parser = "0.14.0"
+prometheus = "0.13.2"
 
 [build-dependencies]
 tonic-build = { version = "0.8.0", features = ["prost"] }

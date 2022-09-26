@@ -29,7 +29,6 @@ pub struct Balancer {
 impl Balancer {
     pub fn new() -> Self {
         Self {
-            // cluster_url:  solana_client(common_params.rpc_url, common_params.commitment);
             tx_consumers: Default::default(),
             stake_weights: Default::default(),
             total_connected_stake: 0,

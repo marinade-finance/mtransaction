@@ -6,8 +6,8 @@ const { EventEmitter, once } = require('events')
 
 const AUTH_API_BASE_URL = 'https://auth.marinade.finance'
 const SOLANA_CLUSTER_URL = 'https://api.devnet.solana.com'
-// const MTX_URL = 'https://rpc.mtx-dev-eu-central-1.marinade.finance'
-const MTX_URL = 'http://localhost:3000'
+const MTX_URL = 'https://rpc.mtx-dev-eu-central-1.marinade.finance'
+// const MTX_URL = 'http://localhost:3000'
 const TX_COUNT = 1000
 
 const fetchTxChallenge = async (pubKey) => {
@@ -98,7 +98,7 @@ const genDemoTxs = function * (user, recentBlockhash) {
 async function * genSignedDemoTxs (user, recentBlockhash) {
   let signaturePromiseBuff = []
   let txBuff = []
-  const BUF_MAX = 100
+  const BUF_MAX = 10
   for (const tx of genDemoTxs(user, recentBlockhash)) {
     txBuff.push(tx)
     signaturePromiseBuff.push(tx.sign(user))

@@ -3,6 +3,7 @@ pub mod pb {
 }
 pub mod balancer;
 pub mod grpc_server;
+pub mod metrics;
 pub mod rpc_server;
 pub mod solana_service;
 
@@ -41,6 +42,12 @@ struct Params {
 
     #[structopt(long = "rpc-commitment", default_value = "finalized")]
     rpc_commitment: String,
+
+    #[structopt(long = "stake-override-identity")]
+    stake_override_identity: Vec<String>,
+
+    #[structopt(long = "stake-override-sol")]
+    stake_override_sol: Vec<u64>,
 }
 
 #[tokio::main]
@@ -54,14 +61,42 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     {
         let balancer = balancer.clone();
         let solana_client = solana_client.clone();
+        let stake_override: std::collections::HashMap<_, _> = params
+            .stake_override_identity
+            .iter()
+            .cloned()
+            .zip(params.stake_override_sol.iter().cloned())
+            .collect();
         tokio::spawn(async move {
+            let mut last_epoch = 0;
+            info!("Stake overrides loaded: {:?}", &stake_override);
             loop {
-                match get_activated_stake(solana_client.as_ref()) {
-                    Ok(stake_weights) => {
-                        balancer.write().await.update_stake_weights(stake_weights);
+                let epoch = match get_current_epoch(solana_client.as_ref()) {
+                    Ok(epoch) => {
+                        info!("Current epoch is: {}", epoch);
+                        epoch
                     }
-                    Err(err) => error!("Failed to update stake weights: {}", err),
+                    Err(err) => {
+                        error!("Failed to get current epoch: {}", err);
+                        last_epoch
+                    }
                 };
+
+                if last_epoch != epoch {
+                    match get_activated_stake(solana_client.as_ref()) {
+                        Ok(stake_weights) => {
+                            balancer.write().await.update_stake_weights(
+                                stake_weights
+                                    .into_iter()
+                                    .chain(stake_override.clone())
+                                    .collect(),
+                            );
+                            last_epoch = epoch;
+                        }
+                        Err(err) => error!("Failed to update stake weights: {}", err),
+                    };
+                }
+
                 tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
             }
         });

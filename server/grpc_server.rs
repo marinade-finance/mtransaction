@@ -64,6 +64,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
         let (tx, rx) = if let Some((tx, rx)) = balancer.subscribe(identity.clone()) {
             (tx, rx)
         } else {
+            error!("The client {} is already connected!", &identity);
             return Err(Status::resource_exhausted(format!(
                 "Client with the same identity {} is already connected!",
                 &identity

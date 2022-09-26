@@ -5,9 +5,11 @@ TBD
 TBD
 
 ## Server
-Generate certificate:
+Generate certificates:
 ```bash
 make cert-server
+make cert-client cmd=req identity=foo
+make cert-client cmd=sign
 ```
 Run:
 ```bash
@@ -27,8 +29,8 @@ make cert-client cmd=sign
 Get server certificate:
 ```bash
 export HOST=mtx-dev-eu-central-1.marinade.finance
-export PORT=443
-echo -n | openssl s_client -connect $HOST:$PORT | openssl x509 > /tmp/$HOST.cert
+export PORT=50051
+echo -n | openssl s_client -connect $HOST:$PORT | openssl x509 > ./certs/$HOST.cert
 ```
 ## Tester
 TBD
