@@ -37,18 +37,18 @@ function connect(millisecondsToWait) {
         fs.readFileSync(getEnvironmentVariable('TLS_GRPC_CLIENT_CERT')),
     );
     const mtransactionClient = new validatorProto.MTransaction(getEnvironmentVariable('GRPC_SERVER_ADDR'), ssl_creds);
-    console.log(r, 'connecting...')
+    const cluster = new web3.Connection(getEnvironmentVariable('SOLANA_CLUSTER_URL'))
     const call = mtransactionClient.TxStream({message: 'Listening for transactions'}, (err, message) => {
         console.log(r, err, message);
     });
     call.on('data', ({ data }) => {
-      // try {
-      //   const tx = web3.Transaction.populate(web3.Message.from(Buffer.from(data, 'base64')))
-      // } catch (err) {
-      //   console.log(r, data, err)
-      // }
-      console.log(r, data);
-      millisecondsToWait = 500;
+        try {
+            cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' }).then((v) => console.log(r, 'tx', v))
+        } catch (err) {
+            console.log(r, data, err)
+        }
+        console.log(r, data);
+        millisecondsToWait = 500;
     });
     call.on('end', () => {
         millisecondsToWait += millisecondsToWait;
