@@ -134,6 +134,7 @@ const run = async () => {
   const authToken = await authenticate(user)
   console.log('TOKEN', authToken)
 
+  // await cluster.requestAirdrop(user.publicKey, 1e9);
   const { blockhash: recentBlockhash } = await cluster.getRecentBlockhash()
 
   const MAX_PARALLEL_REQUESTS = 16
