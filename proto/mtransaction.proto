@@ -5,12 +5,36 @@ package validator;
 // The MTransaction service definition.
 service MTransaction {
   // Sends message to be streamed back
-  rpc TxStream(TxMessageRequest) returns (stream TxMessage) {}
+  rpc TxStream(stream RequestMessageEnvelope) returns (stream ResponseMessageEnevelope) {}
 }
 
-message TxMessageRequest {}
+message RequestMessageEnvelope {
+  Pong pong = 1;
+  Metrics metrics = 2;
+}
 
-// The response message
-message TxMessage {
+// The response message envelope
+message ResponseMessageEnevelope {
+  Tx tx = 1;
+  Ping ping = 2;
+}
+
+// The response Tx
+message Tx {
   string data = 1;
+}
+
+// The response Ping
+message Ping {
+  string id = 1;
+}
+
+// The request Pong
+message Pong {
+  string id = 1;
+}
+
+// The request Metrics
+message Metrics {
+  uint64 tx_received = 1;
 }

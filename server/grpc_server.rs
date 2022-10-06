@@ -5,23 +5,39 @@ use crate::balancer::*;
 use futures::Stream;
 use jsonrpc_http_server::*;
 use log::{error, info, warn};
+use rand::distributions::{Alphanumeric, DistString};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
-use tonic::{Request, Response, Status};
+use tonic::{Request, Response, Status, Streaming};
 use x509_parser::prelude::*;
 
-use pb::{TxMessage, TxMessageRequest};
+use pb::{RequestMessageEnvelope, ResponseMessageEnevelope};
 
-type TxMessageStream = Pin<Box<dyn Stream<Item = std::result::Result<TxMessage, Status>> + Send>>;
+type ResponseMessageEnevelopeStream =
+    Pin<Box<dyn Stream<Item = std::result::Result<ResponseMessageEnevelope, Status>> + Send>>;
 
 pub struct MTransactionServer {
     balancer: Arc<RwLock<Balancer>>,
 }
 
-fn get_identity_from_req(req: &Request<TxMessageRequest>) -> Option<String> {
+pub fn build_tx_message_envelope(data: String) -> ResponseMessageEnevelope {
+    ResponseMessageEnevelope {
+        tx: Some(pb::Tx { data }),
+        ..Default::default()
+    }
+}
+
+pub fn build_ping_message_envelope(id: String) -> ResponseMessageEnevelope {
+    ResponseMessageEnevelope {
+        ping: Some(pb::Ping { id }),
+        ..Default::default()
+    }
+}
+
+fn get_identity_from_req(req: &Request<Streaming<RequestMessageEnvelope>>) -> Option<String> {
     if let Some(certs) = req.peer_certs() {
         for cert in certs.as_ref() {
             if let Ok((_, cert)) = X509Certificate::from_der(cert.get_ref()) {
@@ -39,10 +55,10 @@ fn get_identity_from_req(req: &Request<TxMessageRequest>) -> Option<String> {
 
 #[tonic::async_trait]
 impl pb::m_transaction_server::MTransaction for MTransactionServer {
-    type TxStreamStream = TxMessageStream;
+    type TxStreamStream = ResponseMessageEnevelopeStream;
     async fn tx_stream(
         &self,
-        req: Request<TxMessageRequest>,
+        req: Request<Streaming<RequestMessageEnvelope>>,
     ) -> std::result::Result<Response<Self::TxStreamStream>, Status> {
         let identity = match get_identity_from_req(&req) {
             Some(identity) => identity,
@@ -54,33 +70,74 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                 return Err(Status::unauthenticated("Not authenticated!".to_string()));
             }
         };
+        let token = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
         info!(
-            "New client connected: {:?} {:?}.",
+            "New client connected: {} {:?} {}.",
             &identity,
-            req.remote_addr()
+            req.remote_addr().unwrap(),
+            &token,
         );
 
         let mut balancer = self.balancer.write().await;
-        let (tx, rx) = if let Some((tx, rx)) = balancer.subscribe(identity.clone()) {
-            (tx, rx)
-        } else {
-            error!("The client {} is already connected!", &identity);
-            return Err(Status::resource_exhausted(format!(
-                "Client with the same identity {} is already connected!",
-                &identity
-            )));
-        };
+        let (tx, rx) = balancer.subscribe(identity.clone(), token.clone());
+
+        let mut input_stream = req.into_inner();
+        let output_stream = ReceiverStream::new(rx);
+
+        {
+            let identity = identity.clone();
+            tokio::spawn(async move {
+                while let Some(request_message_envelope) = input_stream.next().await {
+                    match request_message_envelope {
+                        Ok(request_message_envelope) => info!(
+                            "Received message from client {}: {:?}",
+                            &identity, request_message_envelope
+                        ),
+                        Err(err) => error!(
+                            "Error receiving message from the client {}: {}",
+                            &identity, err
+                        ),
+                    }
+                }
+                println!("\tstream ended");
+            });
+        }
+
+        {
+            let tx = tx.clone();
+            let identity = identity.clone();
+            tokio::spawn(async move {
+                let mut id = 0;
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    id += 1;
+                    match tx
+                        .send(Result::<_, Status>::Ok(build_ping_message_envelope(
+                            id.to_string(),
+                        )))
+                        .await
+                    {
+                        Ok(_) => info!("Ping has been sent to {}: {}", &identity, id),
+                        Err(err) => {
+                            error!("Error sending ping to the client {}: {}", &identity, err)
+                        }
+                    }
+                }
+            });
+        }
 
         {
             let balancer = self.balancer.clone();
             tokio::spawn(async move {
                 tx.closed().await;
-                info!("The client has disconnected {:?}", &identity);
-                balancer.write().await.unsubscribe(&identity);
+                info!(
+                    "The connection to the client has been closed {} ({})",
+                    &identity, &token
+                );
+                balancer.write().await.unsubscribe(&identity, &token);
             });
         }
 
-        let output_stream = ReceiverStream::new(rx);
         Ok(Response::new(
             Box::pin(output_stream) as Self::TxStreamStream
         ))

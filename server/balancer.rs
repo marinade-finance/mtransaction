@@ -1,4 +1,4 @@
-use crate::grpc_server;
+use crate::grpc_server::{self, build_tx_message_envelope};
 use jsonrpc_http_server::*;
 use log::{error, info};
 use rand::rngs::StdRng;
@@ -16,7 +16,8 @@ pub struct TxMessage {
 pub struct TxConsumer {
     identity: String,
     stake: u64,
-    tx: mpsc::Sender<std::result::Result<grpc_server::pb::TxMessage, Status>>,
+    tx: mpsc::Sender<std::result::Result<grpc_server::pb::ResponseMessageEnevelope, Status>>,
+    token: String,
 }
 
 #[derive(Clone)]
@@ -38,15 +39,12 @@ impl Balancer {
     pub fn subscribe(
         &mut self,
         identity: String,
-    ) -> Option<(
-        mpsc::Sender<std::result::Result<grpc_server::pb::TxMessage, Status>>,
-        mpsc::Receiver<std::result::Result<grpc_server::pb::TxMessage, Status>>,
-    )> {
-        if self.tx_consumers.contains_key(&identity) {
-            return None;
-        }
-
-        info!("Subscribing {}", &identity);
+        token: String,
+    ) -> (
+        mpsc::Sender<std::result::Result<grpc_server::pb::ResponseMessageEnevelope, Status>>,
+        mpsc::Receiver<std::result::Result<grpc_server::pb::ResponseMessageEnevelope, Status>>,
+    ) {
+        info!("Subscribing {} ({})", &identity, &token);
         let (tx, rx) = mpsc::channel(100);
         self.tx_consumers.insert(
             identity.clone(),
@@ -54,15 +52,20 @@ impl Balancer {
                 identity: identity.clone(),
                 stake: *self.stake_weights.get(&identity).unwrap_or(&1),
                 tx: tx.clone(),
+                token,
             },
         );
         self.recalc_total_connected_stake();
-        Some((tx, rx))
+        (tx, rx)
     }
 
-    pub fn unsubscribe(&mut self, identity: &String) {
-        self.tx_consumers.remove(identity);
-        self.recalc_total_connected_stake();
+    pub fn unsubscribe(&mut self, identity: &String, token: &String) {
+        if let Some(tx_consumer) = self.tx_consumers.get(identity) {
+            if tx_consumer.token.eq(token) {
+                self.tx_consumers.remove(identity);
+                self.recalc_total_connected_stake();
+            }
+        }
     }
 
     pub fn pick_tx_consumer(&self) -> Option<TxConsumer> {
@@ -107,9 +110,10 @@ impl Balancer {
             let result = tx_consumer
                 .tx
                 .send(std::result::Result::<_, Status>::Ok(
-                    grpc_server::pb::TxMessage { data },
+                    build_tx_message_envelope(data),
                 ))
                 .await;
+            tx_consumer.tx.downgrade();
             match result {
                 Ok(_) => info!("Successfully forwarded to {}", tx_consumer.identity),
                 Err(err) => error!("Client disconnected {} {}", tx_consumer.identity, err),

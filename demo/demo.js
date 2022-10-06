@@ -5,10 +5,10 @@ const bs58 = require('bs58')
 const { EventEmitter, once } = require('events')
 
 const AUTH_API_BASE_URL = 'https://auth.marinade.finance'
-const SOLANA_CLUSTER_URL = 'https://api.devnet.solana.com'
-const MTX_URL = 'https://rpc.mtx-dev-eu-central-1.marinade.finance'
-// const MTX_URL = 'http://localhost:3000'
-const TX_COUNT = 1000
+const SOLANA_CLUSTER_URL = 'https://api.mainnet-beta.solana.com'
+// const MTX_URL = 'https://rpc.mtx-dev-eu-central-1.marinade.finance'
+const MTX_URL = 'http://localhost:3000'
+const TX_COUNT = 4
 
 const fetchTxChallenge = async (pubKey) => {
   const txChallenge = await fetch(`${AUTH_API_BASE_URL}/auth/tx-challenge?pubkey=${pubKey}`, {

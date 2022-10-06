@@ -29,6 +29,10 @@ function restart(millisecondsToWait, r) {
     }, millisecondsToWait);
 }
 
+class Metrics {
+    tx_received = 0
+}
+
 function connect(millisecondsToWait) {
     const r = Math.random().toString(36).slice(2);
     const ssl_creds = grpc.credentials.createSsl(
@@ -36,18 +40,49 @@ function connect(millisecondsToWait) {
         fs.readFileSync(getEnvironmentVariable('TLS_GRPC_CLIENT_KEY')),
         fs.readFileSync(getEnvironmentVariable('TLS_GRPC_CLIENT_CERT')),
     );
-    const mtransactionClient = new validatorProto.MTransaction(getEnvironmentVariable('GRPC_SERVER_ADDR'), ssl_creds);
     const cluster = new web3.Connection(getEnvironmentVariable('SOLANA_CLUSTER_URL'))
-    const call = mtransactionClient.TxStream({message: 'Listening for transactions'}, (err, message) => {
+    const metrics = new Metrics()
+    const mtransactionClient = new validatorProto.MTransaction(getEnvironmentVariable('GRPC_SERVER_ADDR'), ssl_creds);
+
+    const call = mtransactionClient.TxStream({ message: 'Listening for messages' }, (err, message) => {
         console.log(r, err, message);
     });
-    call.on('data', ({ data }) => {
+
+    const sendPong = (id) => call.write({ pong: { id } })
+    const sendMetrics = () => call.write({ metrics })
+
+    const processTx = (r, { data }) => {
+        console.log(r, 'tx', data)
         try {
-            cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' }).then((v) => console.log(r, 'tx', v))
+            // cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' }).then((v) => console.log(r, 'tx', v))
         } catch (err) {
             console.log(r, data, err)
         }
-        console.log(r, data);
+    }
+    const processPing = (r, { id }) => {
+        console.log(r, 'ping', id)
+        sendPong(id)
+    }
+
+    const scheduleMetrics = () => setTimeout(() => {
+        try {
+            if (!call.writesClosed) {
+                sendMetrics()
+                scheduleMetrics()
+            }
+        } catch (err) {
+            console.log('Failed to send metrics', r, err)
+        }
+    }, 15000)
+    scheduleMetrics()
+
+    call.on('data', ({ tx, ping }) => {
+        if (tx) {
+            processTx(r, tx)
+        }
+        if (ping) {
+            processPing(r, ping)
+        }
         millisecondsToWait = 500;
     });
     call.on('end', () => {
