@@ -25,7 +25,7 @@ process.on('uncaughtException', (err) => {
 function restart(millisecondsToWait, r) {
     console.log(r, "Stream ended", millisecondsToWait);
     setTimeout(() => {
-        connect();
+        connect(millisecondsToWait);
     }, millisecondsToWait);
 }
 
