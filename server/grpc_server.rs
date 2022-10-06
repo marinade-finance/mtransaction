@@ -2,36 +2,65 @@ pub mod pb {
     tonic::include_proto!("validator");
 }
 use crate::balancer::*;
+use crate::metrics::Metric;
 use futures::Stream;
 use jsonrpc_http_server::*;
 use log::{error, info, warn};
 use rand::distributions::{Alphanumeric, DistString};
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc::UnboundedSender, RwLock};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 use x509_parser::prelude::*;
 
-use pb::{RequestMessageEnvelope, ResponseMessageEnevelope};
+use pb::{RequestMessageEnvelope, ResponseMessageEnvelope};
 
-type ResponseMessageEnevelopeStream =
-    Pin<Box<dyn Stream<Item = std::result::Result<ResponseMessageEnevelope, Status>> + Send>>;
+type ResponseMessageEnvelopeStream =
+    Pin<Box<dyn Stream<Item = std::result::Result<ResponseMessageEnvelope, Status>> + Send>>;
 
 pub struct MTransactionServer {
     balancer: Arc<RwLock<Balancer>>,
+    tx_metrics: UnboundedSender<Vec<Metric>>,
 }
 
-pub fn build_tx_message_envelope(data: String) -> ResponseMessageEnevelope {
-    ResponseMessageEnevelope {
+#[derive(Clone)]
+struct Ping {
+    id: u64,
+    at: tokio::time::Instant,
+}
+
+impl Ping {
+    fn new() -> Self {
+        Self {
+            id: 0,
+            at: tokio::time::Instant::now(),
+        }
+    }
+}
+
+impl Iterator for Ping {
+    type Item = Ping;
+
+    fn next(&mut self) -> Option<Ping> {
+        self.id += 1;
+        Some(Ping {
+            id: self.id,
+            at: tokio::time::Instant::now(),
+        })
+    }
+}
+
+pub fn build_tx_message_envelope(data: String) -> ResponseMessageEnvelope {
+    ResponseMessageEnvelope {
         tx: Some(pb::Tx { data }),
         ..Default::default()
     }
 }
 
-pub fn build_ping_message_envelope(id: String) -> ResponseMessageEnevelope {
-    ResponseMessageEnevelope {
+pub fn build_ping_message_envelope(id: String) -> ResponseMessageEnvelope {
+    ResponseMessageEnvelope {
         ping: Some(pb::Ping { id }),
         ..Default::default()
     }
@@ -55,7 +84,7 @@ fn get_identity_from_req(req: &Request<Streaming<RequestMessageEnvelope>>) -> Op
 
 #[tonic::async_trait]
 impl pb::m_transaction_server::MTransaction for MTransactionServer {
-    type TxStreamStream = ResponseMessageEnevelopeStream;
+    type TxStreamStream = ResponseMessageEnvelopeStream;
     async fn tx_stream(
         &self,
         req: Request<Streaming<RequestMessageEnvelope>>,
@@ -71,70 +100,103 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
             }
         };
         let token = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+
         info!(
-            "New client connected: {} {:?} {}.",
+            "New client connected: {} ({}) {:?}.",
             &identity,
-            req.remote_addr().unwrap(),
             &token,
+            req.remote_addr().unwrap(),
+        );
+
+        let mut ping_stream = Box::pin(
+            tokio_stream::iter(Ping::new()).throttle(tokio::time::Duration::from_secs(10)),
         );
 
         let mut balancer = self.balancer.write().await;
-        let (tx, rx) = balancer.subscribe(identity.clone(), token.clone());
+        let (tx, rx, mut rx_unsubscribe) = balancer.subscribe(identity.clone(), token.clone());
 
         let mut input_stream = req.into_inner();
         let output_stream = ReceiverStream::new(rx);
 
         {
             let identity = identity.clone();
-            tokio::spawn(async move {
-                while let Some(request_message_envelope) = input_stream.next().await {
-                    match request_message_envelope {
-                        Ok(request_message_envelope) => info!(
-                            "Received message from client {}: {:?}",
-                            &identity, request_message_envelope
-                        ),
-                        Err(err) => error!(
-                            "Error receiving message from the client {}: {}",
-                            &identity, err
-                        ),
-                    }
-                }
-                println!("\tstream ended");
-            });
-        }
-
-        {
-            let tx = tx.clone();
-            let identity = identity.clone();
-            tokio::spawn(async move {
-                let mut id = 0;
-                loop {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
-                    id += 1;
-                    match tx
-                        .send(Result::<_, Status>::Ok(build_ping_message_envelope(
-                            id.to_string(),
-                        )))
-                        .await
-                    {
-                        Ok(_) => info!("Ping has been sent to {}: {}", &identity, id),
-                        Err(err) => {
-                            error!("Error sending ping to the client {}: {}", &identity, err)
-                        }
-                    }
-                }
-            });
-        }
-
-        {
+            let token = token.clone();
             let balancer = self.balancer.clone();
+            let tx_metrics = self.tx_metrics.clone();
+            let mut last_ping = Ping::new();
             tokio::spawn(async move {
-                tx.closed().await;
-                info!(
-                    "The connection to the client has been closed {} ({})",
-                    &identity, &token
-                );
+                loop {
+                    tokio::select! {
+                        unsubscribed = (&mut rx_unsubscribe) => {
+                            info!("Client unsubscribed {} ({}): {:?}", &identity, &token, unsubscribed);
+                            break;
+                        },
+
+                        request_message_envelope = input_stream.next() => {
+                            if let Some(request_message_envelope) = request_message_envelope{
+                                match request_message_envelope {
+                                    Ok(request_message_envelope) => {
+                                        if let Some(metrics) = request_message_envelope.metrics {
+                                            let metrics = vec![
+                                                Metric::ClientTxReceived{ identity: identity.clone(), count: metrics.tx_received },
+                                                Metric::ClientTxSucceeded{ identity: identity.clone(), count: metrics.tx_succeeded },
+                                                Metric::ClientTxFailed{ identity: identity.clone(), count: metrics.tx_failed },
+                                            ];
+                                            info!("Accepted metrics from {} ({}): {:?}", &identity, &token, metrics);
+                                            if let Err(err) = tx_metrics.send(metrics) {
+                                                error!("Failed to update client metrics: {}", err);
+                                            }
+                                        }
+                                        if let Some(pong) = request_message_envelope.pong {
+                                            if last_ping.id.to_string() == pong.id {
+                                                if let Err(err) = tx_metrics.send(vec![
+                                                    Metric::ClientLatency{ identity: identity.clone(), latency: last_ping.at.elapsed().as_micros() as f64 / 1.0e6 / 2.0}
+                                                    ]) {
+                                                    error!("Failed to update client metrics: {}", err);
+                                                }
+                                            }
+                                        }
+                                    },
+                                    Err(err) => error!(
+                                        "Error receiving message from the client {} ({}): {}",
+                                        &identity, &token, err
+                                    ),
+                                };
+                            } else {
+                                info!("Stream from client {} ({}) has ended.", &identity, &token);
+                                break
+                            }
+                        }
+
+                        ping = ping_stream.next() => {
+                            if let Some(ping) = ping {
+                                last_ping = ping.clone();
+                                match tx.send(std::result::Result::<_, Status>::Ok(build_ping_message_envelope(ping.id.to_string()))).await {
+                                    Ok(_) => info!("Ping has been sent to {} ({})", &identity, &token),
+                                    Err(err) => {
+                                        error!(
+                                            "Error sending ping to the client {} ({}): {}",
+                                            &identity, &token, err
+                                        );
+                                        break;
+                                    }
+                                }
+                            } else {
+                                info!("No ping?? {} ({})", &identity, &token);
+                            }
+                        }
+
+                        _ = tx.closed() => {
+                            info!(
+                                "The connection to the client has been closed {} ({})",
+                                &identity, &token
+                            );
+                            break
+                        }
+                    };
+                }
                 balancer.write().await.unsubscribe(&identity, &token);
+                info!("Cleaning resources after client {} ({})", &identity, &token);
             });
         }
 
@@ -178,8 +240,12 @@ pub async fn spawn_grpc_server(
     tls_server_key: Option<String>,
     tls_client_ca_cert: Option<String>,
     balancer: Arc<RwLock<Balancer>>,
+    tx_metrics: UnboundedSender<Vec<Metric>>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let server = MTransactionServer { balancer };
+    let server = MTransactionServer {
+        balancer,
+        tx_metrics,
+    };
 
     let tls = get_tls_config(tls_server_cert, tls_server_key, tls_client_ca_cert).await?;
     let mut server_builder = match tls {

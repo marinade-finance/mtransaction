@@ -31,6 +31,9 @@ struct Params {
     #[structopt(long = "grpc-addr", default_value = "0.0.0.0:50051")]
     grpc_addr: String,
 
+    #[structopt(long = "metrics-addr", default_value = "0.0.0.0:3001")]
+    metrics_addr: String,
+
     #[structopt(long = "rpc-addr", default_value = "0.0.0.0:3000")]
     rpc_addr: String,
 
@@ -102,7 +105,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let _rpc_server = spawn_rpc_server(params.rpc_addr.parse().unwrap(), balancer.clone());
+    let tx_metrics = metrics::spawn(params.metrics_addr.parse().unwrap());
+
+    let _rpc_server = spawn_rpc_server(
+        params.rpc_addr.parse().unwrap(),
+        balancer.clone(),
+        tx_metrics.clone(),
+    );
 
     spawn_grpc_server(
         params.grpc_addr.parse().unwrap(),
@@ -110,6 +119,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         params.tls_grpc_server_key,
         params.tls_grpc_client_ca_cert,
         balancer.clone(),
+        tx_metrics.clone(),
     )
     .await?;
 

@@ -16,8 +16,8 @@ build-all: build-server
 
 run-server: build-server
 	cargo run --bin mtx-server -- \
-		--stake-override-identity foo bar \
-		--stake-override-sol 1000000 2000000 \
+		--stake-override-identity foo     bar \
+		--stake-override-sol      1000000 2000000 \
 		--tls-grpc-server-cert    ./certs/localhost.cert \
 		--tls-grpc-server-key     ./certs/localhost.key \
 		--tls-grpc-client-ca-cert ./certs/client-ca.cert

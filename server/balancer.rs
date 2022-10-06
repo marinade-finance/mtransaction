@@ -4,7 +4,7 @@ use log::{error, info};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tonic::Status;
 
 #[derive(Debug)]
@@ -12,15 +12,22 @@ pub struct TxMessage {
     pub data: String,
 }
 
-#[derive(Clone)]
 pub struct TxConsumer {
     identity: String,
     stake: u64,
-    tx: mpsc::Sender<std::result::Result<grpc_server::pb::ResponseMessageEnevelope, Status>>,
+    tx: mpsc::Sender<std::result::Result<grpc_server::pb::ResponseMessageEnvelope, Status>>,
     token: String,
+    tx_unsubscribe: Option<oneshot::Sender<()>>,
 }
 
-#[derive(Clone)]
+impl Drop for TxConsumer {
+    fn drop(&mut self) {
+        if let Some(tx_unsubscribe) = self.tx_unsubscribe.take() {
+            let _ = tx_unsubscribe.send(());
+        }
+    }
+}
+
 pub struct Balancer {
     pub tx_consumers: HashMap<String, TxConsumer>,
     pub stake_weights: HashMap<String, u64>,
@@ -41,11 +48,13 @@ impl Balancer {
         identity: String,
         token: String,
     ) -> (
-        mpsc::Sender<std::result::Result<grpc_server::pb::ResponseMessageEnevelope, Status>>,
-        mpsc::Receiver<std::result::Result<grpc_server::pb::ResponseMessageEnevelope, Status>>,
+        mpsc::Sender<std::result::Result<grpc_server::pb::ResponseMessageEnvelope, Status>>,
+        mpsc::Receiver<std::result::Result<grpc_server::pb::ResponseMessageEnvelope, Status>>,
+        oneshot::Receiver<()>,
     ) {
         info!("Subscribing {} ({})", &identity, &token);
         let (tx, rx) = mpsc::channel(100);
+        let (tx_unsubscribe, rx_unsubcribe) = oneshot::channel();
         self.tx_consumers.insert(
             identity.clone(),
             TxConsumer {
@@ -53,10 +62,11 @@ impl Balancer {
                 stake: *self.stake_weights.get(&identity).unwrap_or(&1),
                 tx: tx.clone(),
                 token,
+                tx_unsubscribe: Some(tx_unsubscribe),
             },
         );
         self.recalc_total_connected_stake();
-        (tx, rx)
+        (tx, rx, rx_unsubcribe)
     }
 
     pub fn unsubscribe(&mut self, identity: &String, token: &String) {
@@ -68,7 +78,7 @@ impl Balancer {
         }
     }
 
-    pub fn pick_tx_consumer(&self) -> Option<TxConsumer> {
+    pub fn pick_tx_consumer(&self) -> Option<&TxConsumer> {
         let mut rng: StdRng = SeedableRng::from_entropy();
         if self.total_connected_stake == 0 {
             return None;
@@ -79,7 +89,7 @@ impl Balancer {
         for (_, tx_consumer) in self.tx_consumers.iter() {
             accumulated_sum += tx_consumer.stake;
             if random_stake_point < accumulated_sum {
-                return Some(tx_consumer.clone());
+                return Some(tx_consumer);
             }
         }
         return None;
@@ -113,10 +123,9 @@ impl Balancer {
                     build_tx_message_envelope(data),
                 ))
                 .await;
-            tx_consumer.tx.downgrade();
             match result {
                 Ok(_) => info!("Successfully forwarded to {}", tx_consumer.identity),
-                Err(err) => error!("Client disconnected {} {}", tx_consumer.identity, err),
+                Err(err) => error!("Client disconnected {} {}", tx_consumer.identity, err), // TODO unsubscribe
             }
             return Ok(());
         }
