@@ -10,8 +10,8 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {keepCase: true});
 const grpc = require('@grpc/grpc-js');
 const validatorProto = grpc.loadPackageDefinition(packageDefinition).validator;
 
-const getEnvironmentVariable = (key) => {
-  const val = process.env[key]
+const getEnvironmentVariable = (key, def) => {
+  const val = process.env[key] ?? def
   if (val === undefined) {
     throw new Error(`Environment variable ${key} must be defined!`)
   }
@@ -42,7 +42,8 @@ class Metrics {
 function connect(millisecondsToWait) {
     const metrics = new Metrics()
     const logger = Logger.child({ connection: Math.random().toString(36).slice(2) })
-    const cluster = new web3.Connection(getEnvironmentVariable('SOLANA_CLUSTER_URL'))
+    const clusterUrl = getEnvironmentVariable('SOLANA_CLUSTER_URL', null)
+    const cluster = clusterUrl ? new web3.Connection(clusterUrl) : null
     const ssl_creds = grpc.credentials.createSsl(
         fs.readFileSync(getEnvironmentVariable('TLS_GRPC_SERVER_CERT')),
         fs.readFileSync(getEnvironmentVariable('TLS_GRPC_CLIENT_KEY')),
@@ -64,8 +65,18 @@ function connect(millisecondsToWait) {
         metrics.tx_received++
         logger.info('Received tx', { data })
         try {
-            // cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' }).then((v) => console.log(r, 'tx', v))
-            metrics.tx_succeeded++
+            if (!cluster) {
+                throw new Error('Not connected to the cluster!')
+            }
+            cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' })
+                .then(() => {
+                    metrics.tx_succeeded++
+                    logger.info("Tx forwarded", { data })
+                })
+                .catch((err) => {
+                    metrics.tx_failed++
+                    logger.info("Forward failed!", { err, data })
+                })
         } catch (err) {
             logger.error('Failed to process tx', { err })
             metrics.tx_failed++
