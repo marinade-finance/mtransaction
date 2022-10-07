@@ -44,7 +44,12 @@ impl Rpc for RpcServer {
         _config: Option<SendPriorityTransactionConfig>,
     ) -> BoxFuture<Result<()>> {
         info!("RPC method sendTransaction called.");
-        if let Err(err) = meta.tx_metrics.send(vec![Metric::ServerRpcTxAccepted]) {
+        if let Err(err) = meta.tx_metrics.send(vec![
+            Metric::ServerRpcTxAccepted,
+            Metric::ServerRpcTxBytesIn {
+                bytes: data.len() as u64,
+            },
+        ]) {
             error!("Failed to update RPC metrics: {}", err);
         }
         Box::pin(async move {
@@ -84,7 +89,7 @@ pub fn spawn_rpc_server(
     .cors(DomainsValidation::AllowOnly(vec![
         AccessControlAllowOrigin::Any,
     ]))
-    .threads(16)
+    .threads(64)
     .start_http(&rpc_addr)
     .expect("Unable to start TCP RPC server")
 }

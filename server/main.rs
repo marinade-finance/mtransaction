@@ -31,7 +31,7 @@ struct Params {
     #[structopt(long = "grpc-addr", default_value = "0.0.0.0:50051")]
     grpc_addr: String,
 
-    #[structopt(long = "metrics-addr", default_value = "0.0.0.0:3001")]
+    #[structopt(long = "metrics-addr", default_value = "0.0.0.0:9000")]
     metrics_addr: String,
 
     #[structopt(long = "rpc-addr", default_value = "0.0.0.0:3000")]

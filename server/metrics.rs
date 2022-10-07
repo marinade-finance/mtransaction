@@ -1,14 +1,14 @@
-use log::{error, info};
+use log::info;
 use prometheus::{
     register_histogram_vec, register_int_counter, register_int_gauge_vec, Encoder, HistogramVec,
     IntCounter, IntGaugeVec, TextEncoder,
 };
 use std::sync::Arc;
-use tiny_http::{Response, Server};
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedSender},
     RwLock,
 };
+use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 pub struct MetricsStore {
     client_tx_received: IntGaugeVec,
@@ -16,39 +16,45 @@ pub struct MetricsStore {
     client_tx_failed: IntGaugeVec,
     client_latency: HistogramVec,
     server_rpc_tx_accepted: IntCounter,
+    server_rpc_tx_bytes_in: IntCounter,
 }
 
 impl MetricsStore {
     pub fn new() -> Self {
         Self {
             client_tx_received: register_int_gauge_vec!(
-                "client_tx_received",
+                "mtx_client_tx_received",
                 "How many transactions were received by the client",
                 &["identity"]
             )
             .unwrap(),
             client_tx_succeeded: register_int_gauge_vec!(
-                "client_tx_succeeded",
+                "mtx_client_tx_succeeded",
                 "How many transactions were successfully forwarded",
                 &["identity"]
             )
             .unwrap(),
             client_tx_failed: register_int_gauge_vec!(
-                "client_tx_failed",
+                "mtx_client_tx_failed",
                 "How many transactions failed on the client side",
                 &["identity"]
             )
             .unwrap(),
             client_latency: register_histogram_vec!(
-                "client_latency",
+                "mtx_client_latency",
                 "Latency to the client based on ping times",
                 &["identity"],
                 vec![0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56]
             )
             .unwrap(),
             server_rpc_tx_accepted: register_int_counter!(
-                "server_rpc_tx_accepted",
+                "mtx_server_rpc_tx_accepted",
                 "How many transactions were accepted by the server"
+            )
+            .unwrap(),
+            server_rpc_tx_bytes_in: register_int_counter!(
+                "mtx_server_rpc_tx_bytes_in",
+                "How many bytes were ingested by the RPC server"
             )
             .unwrap(),
         }
@@ -73,6 +79,7 @@ impl MetricsStore {
                 .with_label_values(&[&identity])
                 .observe(latency),
             Metric::ServerRpcTxAccepted => self.server_rpc_tx_accepted.inc(),
+            Metric::ServerRpcTxBytesIn { bytes } => self.server_rpc_tx_bytes_in.inc_by(bytes),
         }
     }
 
@@ -99,6 +106,7 @@ pub enum Metric {
     ClientTxFailed { identity: String, count: u64 },
     ClientLatency { identity: String, latency: f64 },
     ServerRpcTxAccepted,
+    ServerRpcTxBytesIn { bytes: u64 },
 }
 
 pub fn spawn(metrics_addr: std::net::SocketAddr) -> UnboundedSender<Vec<Metric>> {
@@ -108,6 +116,7 @@ pub fn spawn(metrics_addr: std::net::SocketAddr) -> UnboundedSender<Vec<Metric>>
     {
         let metrics_store = metrics_store.clone();
         tokio::spawn(async move {
+            info!("Waiting for metrics");
             while let Some(metrics) = rx.recv().await {
                 metrics_store.write().await.process_metrics(metrics);
             }
@@ -115,29 +124,25 @@ pub fn spawn(metrics_addr: std::net::SocketAddr) -> UnboundedSender<Vec<Metric>>
     }
 
     {
-        let metrics_store = metrics_store.clone();
         tokio::spawn(async move {
-            let server = Server::http(metrics_addr).unwrap();
-
-            for request in server.incoming_requests() {
-                info!(
-                    "Received request: {:?} {:?}",
-                    request.method(),
-                    request.url(),
-                );
-
-                let response = if request.url().eq("/metrics") {
-                    Response::from_string(metrics_store.read().await.gather())
-                } else {
-                    Response::from_string("Not found").with_status_code(404)
-                };
-
-                if let Err(err) = request.respond(response) {
-                    error!("Failed to serve the response: {}", err);
-                }
-            }
+            let metrics_route = warp::path!("metrics")
+                .and(warp::get())
+                .and(warp::any().map(move || metrics_store.clone()))
+                .and_then(metrics_handler);
+            info!("Spawning metrics server");
+            warp::serve(metrics_route).run(metrics_addr).await;
         });
     }
 
     tx
+}
+
+pub async fn metrics_handler(
+    metrics_store: Arc<RwLock<MetricsStore>>,
+) -> std::result::Result<impl Reply, Rejection> {
+    info!("Metrics requested");
+    Ok(warp::reply::with_status(
+        metrics_store.read().await.gather(),
+        StatusCode::OK,
+    ))
 }
