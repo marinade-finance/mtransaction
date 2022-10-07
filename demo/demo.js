@@ -1,14 +1,23 @@
 const web3 = require('@solana/web3.js')
 const fetch = require('node-fetch')
-// const process = require('process')
+const minimist = require('minimist')
 const bs58 = require('bs58')
+const fs = require('fs')
 const { EventEmitter, once } = require('events')
+
+const params = minimist(process.argv.slice(2))
+
+const walletFromFile = (path) => web3.Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs.readFileSync(path).toString())))
 
 const AUTH_API_BASE_URL = 'https://auth.marinade.finance'
 const SOLANA_CLUSTER_URL = 'https://api.mainnet-beta.solana.com'
+const MTX_URL = 'https://rpc.mtx-perf-eu-central-1.marinade.finance'
 // const MTX_URL = 'https://rpc.mtx-dev-eu-central-1.marinade.finance'
-const MTX_URL = 'http://localhost:3000'
-const TX_COUNT = 4
+// const MTX_URL = 'http://localhost:3000'
+const TX_COUNT = Number(params['tx-count']) || 0
+const USER_WALLET_PATH = params['user-wallet'] || null
+const USER_WALLET = USER_WALLET_PATH ? walletFromFile(USER_WALLET_PATH) : web3.Keypair.generate()
+const TO_PUBKEY = params['to-pubkey'] || web3.Keypair.generate().publicKey
 
 const fetchTxChallenge = async (pubKey) => {
   const txChallenge = await fetch(`${AUTH_API_BASE_URL}/auth/tx-challenge?pubkey=${pubKey}`, {
@@ -78,28 +87,25 @@ const sendPriorityTransaction = async (
   return result.json()
 }
 
-const buildDemoTx = (user, recentBlockhash) => {
-  const to = web3.Keypair.generate()
-  return new web3.Transaction({
-    recentBlockhash
-  }).add(web3.SystemProgram.transfer({
-    fromPubkey: user.publicKey,
-    toPubkey: to.publicKey,
-    lamports: 1,
-  }))
-}
+const buildDemoTx = (user, toPubkey, recentBlockhash) => new web3.Transaction({
+  recentBlockhash
+}).add(web3.SystemProgram.transfer({
+  fromPubkey: user.publicKey,
+  toPubkey: toPubkey,
+  lamports: 1,
+}))
 
-const genDemoTxs = function * (user, recentBlockhash) {
+const genDemoTxs = function * (user, toPubkey, recentBlockhash) {
   for (let i = 0; i < TX_COUNT; i++) {
-    yield buildDemoTx(user, recentBlockhash)
+    yield buildDemoTx(user, toPubkey, recentBlockhash)
   }
 }
 
-async function * genSignedDemoTxs (user, recentBlockhash) {
+async function * genSignedDemoTxs (user, toPubkey, recentBlockhash) {
   let signaturePromiseBuff = []
   let txBuff = []
   const BUF_MAX = 10
-  for (const tx of genDemoTxs(user, recentBlockhash)) {
+  for (const tx of genDemoTxs(user, toPubkey, recentBlockhash)) {
     txBuff.push(tx)
     signaturePromiseBuff.push(tx.sign(user))
     if (txBuff.length == BUF_MAX) {
@@ -122,7 +128,8 @@ const Event = {
 
 const run = async () => {
   const cluster = new web3.Connection(SOLANA_CLUSTER_URL)
-  const user = web3.Keypair.generate()
+  const user = USER_WALLET
+  const toPubkey = TO_PUBKEY
 
   const authToken = await authenticate(user)
   console.log('TOKEN', authToken)
@@ -148,7 +155,7 @@ const run = async () => {
     console.log("Finished requests:", totalRequestsFinished, "Total time:", duration, "TPS:", totalRequestsFinished / duration)
   })
 
-  for await (const signedTx of genSignedDemoTxs(user, recentBlockhash)) {
+  for await (const signedTx of genSignedDemoTxs(user, toPubkey, recentBlockhash)) {
     if (parallelRequests == MAX_PARALLEL_REQUESTS) {
       await once(limitter, Event.TASK_FINISHED)
     }
