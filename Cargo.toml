@@ -7,6 +7,10 @@ edition = "2021"
 name = "mtx-server"
 path = "server/main.rs"
 
+[[bin]]
+name = "mtx-client-quic"
+path = "client-quic/main.rs"
+
 [dependencies]
 async-stream = "0.3"
 futures = { version = "0.3", default-features = false, features = ["alloc"] }

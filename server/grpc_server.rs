@@ -209,17 +209,17 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
 async fn get_tls_config(
     tls_server_cert: Option<String>,
     tls_server_key: Option<String>,
-    tls_client_ca_cert: Option<String>,
+    tls_grpc_ca_cert: Option<String>,
 ) -> std::result::Result<Option<ServerTlsConfig>, Box<dyn std::error::Error>> {
-    let tls = ServerTlsConfig::new();
-
     let tls = if let (Some(cert), Some(key)) = (tls_server_cert, tls_server_key) {
+        let tls = ServerTlsConfig::new();
+
         info!("Loading server TLS from from {} and {}", cert, key);
         let cert = tokio::fs::read(cert).await?;
         let key = tokio::fs::read(key).await?;
         let tls = tls.identity(Identity::from_pem(cert, key));
 
-        if let Some(cert) = tls_client_ca_cert {
+        if let Some(cert) = tls_grpc_ca_cert {
             info!("Loading client CA from from {}", cert);
             let cert = tokio::fs::read(cert).await?;
             Some(tls.client_ca_root(Certificate::from_pem(cert)))
@@ -238,7 +238,7 @@ pub async fn spawn_grpc_server(
     grpc_addr: std::net::SocketAddr,
     tls_server_cert: Option<String>,
     tls_server_key: Option<String>,
-    tls_client_ca_cert: Option<String>,
+    tls_grpc_ca_cert: Option<String>,
     balancer: Arc<RwLock<Balancer>>,
     tx_metrics: UnboundedSender<Vec<Metric>>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -247,7 +247,7 @@ pub async fn spawn_grpc_server(
         tx_metrics,
     };
 
-    let tls = get_tls_config(tls_server_cert, tls_server_key, tls_client_ca_cert).await?;
+    let tls = get_tls_config(tls_server_cert, tls_server_key, tls_grpc_ca_cert).await?;
     let mut server_builder = match tls {
         Some(tls) => Server::builder().tls_config(tls)?,
         _ => Server::builder(),

@@ -2,4 +2,7 @@
 *.DS_Store
 demo/node_modules/*
 client/node_modules/*
-certs/*
+certs/*.cert
+certs/*.key
+certs/*.req
+certs/*.srl

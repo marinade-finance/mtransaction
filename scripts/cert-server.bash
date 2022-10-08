@@ -6,6 +6,8 @@ CERTS="$SCRIPT_DIR/../certs"
 
 mkdir -p "$CERTS"
 
-openssl req -x509 -newkey rsa:2048 -days 3650 -nodes -keyout "$CERTS/client-ca.key" -out "$CERTS/client-ca.cert" -subj "/CN=Marinade test"
+openssl req -x509 -newkey rsa:4096 -days 3650 -nodes -keyout "$CERTS/ca.key" -out "$CERTS/ca.cert" -subj "/O=foo/OU=bar/CN=Marinade test"
 
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout "$CERTS/localhost.key" -out "$CERTS/localhost.cert" -subj "/CN=localhost" -addext "subjectAltName = DNS:localhost"
+openssl req -newkey rsa:4096 -nodes -keyout "$CERTS/localhost.key" -out "$CERTS/localhost.req" -subj "/CN=localhost" -addext "subjectAltName = DNS:localhost" -addext extendedKeyUsage=serverAuth
+
+openssl x509 -req -in "$CERTS/localhost.req" -days 365 -CA "$CERTS/ca.cert" -CAkey "$CERTS/ca.key" -CAcreateserial -out "$CERTS/localhost.cert" -extfile "$CERTS/openssl.server.conf"

@@ -25,8 +25,8 @@ struct Params {
     #[structopt(long = "tls-grpc-server-key")]
     tls_grpc_server_key: Option<String>,
 
-    #[structopt(long = "tls-grpc-client-ca-cert")]
-    tls_grpc_client_ca_cert: Option<String>,
+    #[structopt(long = "tls-grpc-ca-cert")]
+    tls_grpc_ca_cert: Option<String>,
 
     #[structopt(long = "grpc-addr", default_value = "0.0.0.0:50051")]
     grpc_addr: String,
@@ -117,7 +117,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         params.grpc_addr.parse().unwrap(),
         params.tls_grpc_server_cert,
         params.tls_grpc_server_key,
-        params.tls_grpc_client_ca_cert,
+        params.tls_grpc_ca_cert,
         balancer.clone(),
         tx_metrics.clone(),
     )
