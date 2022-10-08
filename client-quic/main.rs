@@ -3,16 +3,13 @@ pub mod pb {
 }
 
 use pb::m_transaction_client::MTransactionClient;
-use pb::{Metrics, Pong, RequestMessageEnvelope};
+use pb::{Metrics, Pong, RequestMessageEnvelope, Tx};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 use env_logger::Env;
-use futures::stream::Stream;
 use log::{error, info, warn};
-use std::sync::Arc;
 use std::time::Duration;
 use structopt::StructOpt;
-use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 
 #[derive(Debug, StructOpt)]
@@ -33,23 +30,72 @@ struct Params {
     identity: Option<String>,
 }
 
-async fn metrics_streaming(client: &mut MTransactionClient<Channel>) {
-    let metrics_stream = tokio_stream::iter(std::iter::repeat(()))
-        .map(|_| RequestMessageEnvelope {
-            metrics: Some(Metrics {
+async fn metrics_streaming(
+    client: &mut MTransactionClient<Channel>,
+    tx_queue: tokio::sync::mpsc::UnboundedSender<Tx>,
+) {
+    let mut metrics_stream = Box::pin(
+        tokio_stream::iter(std::iter::repeat(()))
+            .map(|_| RequestMessageEnvelope {
+                metrics: Some(Metrics {
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        })
-        .throttle(Duration::from_secs(15));
+            })
+            .throttle(Duration::from_secs(15)),
+    );
 
-    let response = client.tx_stream(metrics_stream).await.unwrap();
+    let (tx_response, mut rx) = tokio::sync::mpsc::unbounded_channel::<RequestMessageEnvelope>();
+    let request_stream = async_stream::stream! {
+        while let Some(item) = rx.recv().await {
+            yield item;
+        }
+    };
 
-    let mut resp_stream = response.into_inner();
+    let response = client.tx_stream(request_stream).await.unwrap();
+    let mut response_stream = response.into_inner();
 
-    while let Some(received) = resp_stream.next().await {
-        let received = received.unwrap();
-        info!("received message: `{:?}`", received);
+    loop {
+        tokio::select! {
+            metrics = metrics_stream.next() => {
+                if let Some(metrics) = metrics {
+                    info!("Sending metrics: {:?}", metrics);
+                    if let Err(err) = tx_response.send(metrics) {
+                        error!("Failed to enqueue metrics: {}", err);
+                    }
+                } else {
+                    error!("What are you doing, metrics?");
+                }
+            }
+
+            response_message_envelope = response_stream.next() => {
+                if let Some(response_message_envelope) = response_message_envelope {
+                    info!("Upstream: {:?}", response_message_envelope);
+                    if let Ok(response_message_envelope) = response_message_envelope {
+                        if let Some(ping) = response_message_envelope.ping {
+                            info!("Sending pong: {}", ping.id);
+                            if let Err(err) = tx_response.send(RequestMessageEnvelope {
+                                pong: Some(Pong {
+                                    id: ping.id,
+                                }),
+                                ..Default::default()
+                            }) {
+                                error!("Failed to enqueue pong: {}", err);
+                            }
+                        }
+                        if let Some(tx) = response_message_envelope.tx {
+                            info!("Enqueuing tx: {:?}", &tx);
+                            if let Err(err) = tx_queue.send(tx) {
+                                error!("Failed to enqueue tx: {}", err);
+                            }
+                        }
+                    }
+                } else {
+                    error!("Upstream closed!");
+                    break
+                }
+            }
+        }
     }
 }
 
@@ -104,8 +150,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .connect()
     .await?;
 
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+        tokio::spawn(async move {
+            while let Some(tx) = rx.recv().await {
+                info!("Forwarding tx {:?}", &tx);
+            }
+        });
+    }
+
     let mut client = MTransactionClient::new(channel);
-    metrics_streaming(&mut client).await;
+    metrics_streaming(&mut client, tx).await;
 
     info!("Service stopped.");
     Ok(())
