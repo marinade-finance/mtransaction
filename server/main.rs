@@ -1,6 +1,3 @@
-pub mod pb {
-    tonic::include_proto!("validator");
-}
 pub mod balancer;
 pub mod grpc_server;
 pub mod metrics;
