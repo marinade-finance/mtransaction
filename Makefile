@@ -39,7 +39,8 @@ run-client-quic-local: build-client-quic
 		--tls-grpc-ca-cert     ./certs/ca.cert \
 		--tls-grpc-client-key  ./certs/client.$(client).key \
 		--tls-grpc-client-cert ./certs/client.$(client).cert \
-		--grpc-url             http://localhost:50051
+		--grpc-url             http://localhost:50051 \
+		--tpu-addr             "$(tpu)"
 
 run-client-local:
 	TLS_GRPC_SERVER_CERT=./certs/ca.cert \

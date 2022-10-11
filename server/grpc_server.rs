@@ -52,9 +52,9 @@ impl Iterator for Ping {
     }
 }
 
-pub fn build_tx_message_envelope(data: String) -> ResponseMessageEnvelope {
+pub fn build_tx_message_envelope(data: String, tpu: Vec<String>) -> ResponseMessageEnvelope {
     ResponseMessageEnvelope {
-        tx: Some(pb::Tx { data }),
+        tx: Some(pb::Tx { data, tpu }),
         ..Default::default()
     }
 }

@@ -22,6 +22,7 @@ message ResponseMessageEnvelope {
 // The response Tx
 message Tx {
   string data = 1;
+  repeated string tpu = 2;
 }
 
 // The response Ping

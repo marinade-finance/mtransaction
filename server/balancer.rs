@@ -1,10 +1,13 @@
 use crate::grpc_server::{self, build_tx_message_envelope};
+use crate::solana_service::{get_tpu_by_identity, leaders_stream};
 use jsonrpc_http_server::*;
 use log::{error, info};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use std::collections::HashMap;
-use tokio::sync::{mpsc, oneshot};
+use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tonic::Status;
 
 #[derive(Debug)]
@@ -32,6 +35,7 @@ pub struct Balancer {
     pub tx_consumers: HashMap<String, TxConsumer>,
     pub stake_weights: HashMap<String, u64>,
     pub total_connected_stake: u64,
+    pub leader_tpus: Vec<String>,
 }
 
 impl Balancer {
@@ -40,6 +44,7 @@ impl Balancer {
             tx_consumers: Default::default(),
             stake_weights: Default::default(),
             total_connected_stake: 0,
+            leader_tpus: Default::default(),
         }
     }
 
@@ -120,7 +125,7 @@ impl Balancer {
             let result = tx_consumer
                 .tx
                 .send(std::result::Result::<_, Status>::Ok(
-                    build_tx_message_envelope(data),
+                    build_tx_message_envelope(data, self.leader_tpus.clone()),
                 ))
                 .await;
             match result {
@@ -132,4 +137,53 @@ impl Balancer {
         error!("Dropping tx, no non-delinquent listening clients");
         Err("No non-delinquent clients with stake are connected".into())
     }
+
+    pub fn set_leader_tpus(&mut self, tpus: Vec<String>) {
+        self.leader_tpus = tpus;
+    }
+}
+
+pub fn balancer_updater(
+    balancer: Arc<RwLock<Balancer>>,
+    client: Arc<RpcClient>,
+    pubsub_client: Arc<PubsubClient>,
+) {
+    let balancer = balancer.clone();
+    let mut rx_leaders = UnboundedReceiverStream::new(
+        leaders_stream(client.clone(), pubsub_client.clone()).unwrap(),
+    );
+
+    let mut refresh_cluster_nodes_hint = Box::pin(
+        tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(3600)),
+    );
+
+    let mut tpu_by_identity = Default::default();
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = refresh_cluster_nodes_hint.next() => {
+                    match get_tpu_by_identity(client.as_ref()) {
+                        Ok(result) => {
+                            info!("Updated TPUs by identity (count: {})", result.len());
+                            tpu_by_identity = result;
+                        },
+                        Err(err) => error!("Failed to update TPUs by identity: {}", err)
+                    };
+                },
+                leaders = rx_leaders.next() => {
+                    if let Some(leaders) = leaders {
+                        info!("New leaders {:?}", &leaders);
+                        let tpus = leaders
+                            .iter()
+                            .filter_map(|identity| tpu_by_identity.get(identity))
+                            .cloned()
+                            .collect();
+                        info!("New leaders {:?} {:?}", &leaders, &tpus);
+                        balancer.write().await.set_leader_tpus(tpus);
+                    }
+                },
+            }
+        }
+    });
 }

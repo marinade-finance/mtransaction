@@ -36,8 +36,6 @@ fn process_upstream_message(
     tx_response: UnboundedSender<RequestMessageEnvelope>,
     tx_queue: UnboundedSender<Tx>,
 ) {
-    info!("Upstream: {:?}", response);
-
     match response {
         Ok(response_message_envelope) => {
             if let Some(ping) = response_message_envelope.ping {

@@ -10,6 +10,7 @@ use crate::rpc_server::*;
 use crate::solana_service::*;
 use env_logger::Env;
 use log::{error, info};
+use solana_client::nonblocking::pubsub_client::PubsubClient;
 use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::sync::RwLock;
@@ -40,6 +41,12 @@ struct Params {
     )]
     rpc_url: String,
 
+    #[structopt(
+        long = "ws-rpc-url",
+        default_value = "wss://api.mainnet-beta.solana.com"
+    )]
+    ws_rpc_url: String,
+
     #[structopt(long = "rpc-commitment", default_value = "finalized")]
     rpc_commitment: String,
 
@@ -55,12 +62,12 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let params = Params::from_args();
 
-    let solana_client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
+    let client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
     let balancer = Arc::new(RwLock::new(Balancer::new()));
 
     {
         let balancer = balancer.clone();
-        let solana_client = solana_client.clone();
+        let client = client.clone();
         let stake_override: std::collections::HashMap<_, _> = params
             .stake_override_identity
             .iter()
@@ -68,10 +75,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .zip(params.stake_override_sol.iter().cloned())
             .collect();
         tokio::spawn(async move {
+            // todo move to balancer_updater
             let mut last_epoch = 0;
             info!("Stake overrides loaded: {:?}", &stake_override);
             loop {
-                let epoch = match get_current_epoch(solana_client.as_ref()) {
+                let epoch = match get_current_epoch(client.as_ref()) {
                     Ok(epoch) => {
                         info!("Current epoch is: {}", epoch);
                         epoch
@@ -83,7 +91,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 };
 
                 if last_epoch != epoch {
-                    match get_activated_stake(solana_client.as_ref()) {
+                    match get_activated_stake(client.as_ref()) {
                         Ok(stake_weights) => {
                             balancer.write().await.update_stake_weights(
                                 stake_weights
@@ -101,6 +109,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+
+    let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
+    balancer_updater(balancer.clone(), client, pubsub_client);
 
     let tx_metrics = metrics::spawn(params.metrics_addr.parse().unwrap());
 

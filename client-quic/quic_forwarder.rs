@@ -12,17 +12,13 @@ use std::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-pub fn forward_tx(connection_cache: Arc<ConnectionCache>, tx: String) {
-    info!("Sending tx....");
+pub fn forward_tx(connection_cache: Arc<ConnectionCache>, tx: String, tpu: SocketAddr) {
     let tx = decode(tx).unwrap();
-    let tpu_addr = "141.98.217.56".parse().unwrap();
-    let tpu_port = 8003;
-    let tpu = SocketAddr::new(tpu_addr, tpu_port);
     let conn = connection_cache.get_connection(&tpu);
     if let Err(err) = conn.send_wire_transaction(tx) {
         error!("Failed to send the tx: {}", err);
     }
-    info!("Tx sent!");
+    info!("Tx -> {}", &tpu);
 }
 
 pub fn spawn_quic_forwarded(
@@ -46,11 +42,12 @@ pub fn spawn_quic_forwarded(
             let connection_cache = Arc::new(connection_cache);
             while let Some(tx) = rx.recv().await {
                 info!("Forwarding tx {:?}", &tx);
-
-                {
+                for tpu in tx.tpu {
+                    let tx_data = tx.data.clone();
                     let connection_cache = connection_cache.clone();
                     tokio::task::spawn_blocking(move || {
-                        crate::quic_forwarder::forward_tx(connection_cache, tx.data);
+                        let tpu = tpu.parse().unwrap();
+                        crate::quic_forwarder::forward_tx(connection_cache, tx_data, tpu);
                     });
                 }
             }
