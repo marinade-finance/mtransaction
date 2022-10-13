@@ -55,4 +55,5 @@ run-client:
 	TLS_GRPC_CLIENT_CERT=./certs/client.$(client).cert \
 	GRPC_SERVER_ADDR=mtx-dev-eu-central-1.marinade.finance:50051 \
 	SOLANA_CLUSTER_URL=http://localhost:8899 \
+	THROTTLE_LIMIT=100 \
 		node ./client/mconnector.js
