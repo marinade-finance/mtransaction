@@ -1,10 +1,14 @@
 use crate::balancer::*;
 use crate::metrics::Metric;
+use bincode::config::Options;
 use jsonrpc_core::{BoxFuture, MetaIoHandler, Metadata, Result};
 use jsonrpc_derive::rpc;
 use jsonrpc_http_server::*;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
+use solana_sdk::{
+    packet::PACKET_DATA_SIZE, signature::Signature, transaction::VersionedTransaction,
+};
 use std::sync::Arc;
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 
@@ -12,6 +16,7 @@ use tokio::sync::{mpsc::UnboundedSender, RwLock};
 pub struct RpcMetadata {
     balancer: Arc<RwLock<Balancer>>,
     tx_metrics: UnboundedSender<Vec<Metric>>,
+    tx_signatures: UnboundedSender<Signature>,
 }
 impl Metadata for RpcMetadata {}
 
@@ -52,8 +57,47 @@ impl Rpc for RpcServer {
         ]) {
             error!("Failed to update RPC metrics: {}", err);
         }
+
+        let wire_transaction = base64::decode(&data).unwrap();
+        let decoded: Result<VersionedTransaction> = bincode::options()
+            .with_limit(PACKET_DATA_SIZE as u64)
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .deserialize_from(&wire_transaction[..])
+            .map_err(|err| {
+                info!("Deserialize error: {}", err);
+                jsonrpc_core::error::Error::invalid_params(&err.to_string())
+            });
+
+        let signature = match decoded {
+            Ok(decoded) => {
+                if let Some(signature) = decoded.signatures.get(0) {
+                    signature.clone()
+                } else {
+                    return Box::pin(async move {
+                        Err(jsonrpc_core::error::Error {
+                            code: jsonrpc_core::error::ErrorCode::InternalError,
+                            message: "Failed to get the transaction's signature".into(),
+                            data: None,
+                        })
+                    });
+                }
+            }
+            Err(err) => return Box::pin(async move { Err(err) }),
+        };
+
+        if let Err(err) = meta.tx_signatures.send(signature.clone()) {
+            error!("Failed to propagate signature to the watcher: {}", err);
+        }
+
         Box::pin(async move {
-            match meta.balancer.read().await.publish(data).await {
+            match meta
+                .balancer
+                .read()
+                .await
+                .publish(signature.to_string(), data)
+                .await
+            {
                 Ok(_) => Ok(()),
                 Err(_) => Err(jsonrpc_core::error::Error {
                     code: jsonrpc_core::error::ErrorCode::InternalError,
@@ -76,6 +120,7 @@ pub fn spawn_rpc_server(
     rpc_addr: std::net::SocketAddr,
     balancer: Arc<RwLock<Balancer>>,
     tx_metrics: UnboundedSender<Vec<Metric>>,
+    tx_signatures: UnboundedSender<Signature>,
 ) -> Server {
     info!("Spawning RPC server.");
 
@@ -84,6 +129,7 @@ pub fn spawn_rpc_server(
         move |_req: &hyper::Request<hyper::Body>| RpcMetadata {
             balancer: balancer.clone(),
             tx_metrics: tx_metrics.clone(),
+            tx_signatures: tx_signatures.clone(),
         },
     )
     .cors(DomainsValidation::AllowOnly(vec![

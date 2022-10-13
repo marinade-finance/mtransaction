@@ -43,14 +43,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (None, None),
     };
 
-    let tx_queue = spawn_quic_forwarded(identity, tpu_addr);
+    let tx_transactions = spawn_quic_forwarded(identity, tpu_addr);
 
     spawn_grpc_client(
         params.grpc_url.parse().unwrap(),
         params.tls_grpc_ca_cert,
         params.tls_grpc_client_key,
         params.tls_grpc_client_cert,
-        tx_queue,
+        tx_transactions,
     )
     .await?;
 

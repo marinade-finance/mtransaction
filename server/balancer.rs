@@ -118,14 +118,15 @@ impl Balancer {
 
     pub async fn publish(
         &self,
+        signature: String,
         data: String,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        info!("Tx {} {} -> ", &signature, &data);
         if let Some(tx_consumer) = self.pick_tx_consumer() {
-            info!("Forwarding to {}", tx_consumer.identity);
             let result = tx_consumer
                 .tx
                 .send(std::result::Result::<_, Status>::Ok(
-                    build_tx_message_envelope(data, self.leader_tpus.clone()),
+                    build_tx_message_envelope(signature, data, self.leader_tpus.clone()),
                 ))
                 .await;
             match result {
@@ -173,7 +174,6 @@ pub fn balancer_updater(
                 },
                 leaders = rx_leaders.next() => {
                     if let Some(leaders) = leaders {
-                        info!("New leaders {:?}", &leaders);
                         let tpus = leaders
                             .iter()
                             .filter_map(|identity| tpu_by_identity.get(identity))

@@ -65,6 +65,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
     let balancer = Arc::new(RwLock::new(Balancer::new()));
 
+    let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
+
+    balancer_updater(balancer.clone(), client.clone(), pubsub_client.clone());
+
+    let tx_metrics = metrics::spawn(params.metrics_addr.parse().unwrap());
+
+    let tx_signatures =
+        spawn_tx_signature_watcher(pubsub_client.clone(), tx_metrics.clone()).unwrap();
+
     {
         let balancer = balancer.clone();
         let client = client.clone();
@@ -110,15 +119,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
-    balancer_updater(balancer.clone(), client, pubsub_client);
-
-    let tx_metrics = metrics::spawn(params.metrics_addr.parse().unwrap());
-
     let _rpc_server = spawn_rpc_server(
         params.rpc_addr.parse().unwrap(),
         balancer.clone(),
         tx_metrics.clone(),
+        tx_signatures,
     );
 
     spawn_grpc_server(

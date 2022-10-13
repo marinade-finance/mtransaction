@@ -15,14 +15,15 @@ message RequestMessageEnvelope {
 
 // The response message envelope
 message ResponseMessageEnvelope {
-  Tx tx = 1;
+  Transaction transaction = 1;
   Ping ping = 2;
 }
 
 // The response Tx
-message Tx {
+message Transaction {
   string data = 1;
-  repeated string tpu = 2;
+  string signature = 2;
+  repeated string tpu = 3;
 }
 
 // The response Ping
@@ -38,6 +39,6 @@ message Pong {
 // The request Metrics
 message Metrics {
   uint64 tx_received = 1;
-  uint64 tx_succeeded = 2;
-  uint64 tx_failed = 3;
+  uint64 tx_forward_succeeded = 2;
+  uint64 tx_forward_failed = 3;
 }

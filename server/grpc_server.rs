@@ -52,9 +52,17 @@ impl Iterator for Ping {
     }
 }
 
-pub fn build_tx_message_envelope(data: String, tpu: Vec<String>) -> ResponseMessageEnvelope {
+pub fn build_tx_message_envelope(
+    signature: String,
+    data: String,
+    tpu: Vec<String>,
+) -> ResponseMessageEnvelope {
     ResponseMessageEnvelope {
-        tx: Some(pb::Tx { data, tpu }),
+        transaction: Some(pb::Transaction {
+            signature,
+            data,
+            tpu,
+        }),
         ..Default::default()
     }
 }
@@ -139,8 +147,8 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                                         if let Some(metrics) = request_message_envelope.metrics {
                                             let metrics = vec![
                                                 Metric::ClientTxReceived{ identity: identity.clone(), count: metrics.tx_received },
-                                                Metric::ClientTxSucceeded{ identity: identity.clone(), count: metrics.tx_succeeded },
-                                                Metric::ClientTxFailed{ identity: identity.clone(), count: metrics.tx_failed },
+                                                Metric::ClientTxForwardSucceeded{ identity: identity.clone(), count: metrics.tx_forward_succeeded },
+                                                Metric::ClientTxForwardFailed{ identity: identity.clone(), count: metrics.tx_forward_failed },
                                             ];
                                             info!("Accepted metrics from {} ({}): {:?}", &identity, &token, metrics);
                                             if let Err(err) = tx_metrics.send(metrics) {

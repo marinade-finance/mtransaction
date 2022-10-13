@@ -12,9 +12,11 @@ use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 pub struct MetricsStore {
     client_tx_received: IntGaugeVec,
-    client_tx_succeeded: IntGaugeVec,
-    client_tx_failed: IntGaugeVec,
+    client_tx_forward_succeeded: IntGaugeVec,
+    client_tx_forward_failed: IntGaugeVec,
     client_latency: HistogramVec,
+    chain_tx_finalized: IntCounter,
+    chain_tx_timeout: IntCounter,
     server_rpc_tx_accepted: IntCounter,
     server_rpc_tx_bytes_in: IntCounter,
 }
@@ -28,14 +30,14 @@ impl MetricsStore {
                 &["identity"]
             )
             .unwrap(),
-            client_tx_succeeded: register_int_gauge_vec!(
-                "mtx_client_tx_succeeded",
+            client_tx_forward_succeeded: register_int_gauge_vec!(
+                "mtx_client_tx_forward_succeeded",
                 "How many transactions were successfully forwarded",
                 &["identity"]
             )
             .unwrap(),
-            client_tx_failed: register_int_gauge_vec!(
-                "mtx_client_tx_failed",
+            client_tx_forward_failed: register_int_gauge_vec!(
+                "mtx_client_tx_forward_failed",
                 "How many transactions failed on the client side",
                 &["identity"]
             )
@@ -45,6 +47,16 @@ impl MetricsStore {
                 "Latency to the client based on ping times",
                 &["identity"],
                 vec![0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56]
+            )
+            .unwrap(),
+            chain_tx_finalized: register_int_counter!(
+                "mtx_chain_tx_finalized",
+                "How many transactions were finalized on chain"
+            )
+            .unwrap(),
+            chain_tx_timeout: register_int_counter!(
+                "mtx_chain_tx_timeout",
+                "How many transactions we were unable to confirm as finalized"
             )
             .unwrap(),
             server_rpc_tx_accepted: register_int_counter!(
@@ -66,18 +78,20 @@ impl MetricsStore {
                 .client_tx_received
                 .with_label_values(&[&identity])
                 .set(count as i64),
-            Metric::ClientTxSucceeded { identity, count } => self
-                .client_tx_succeeded
+            Metric::ClientTxForwardSucceeded { identity, count } => self
+                .client_tx_forward_succeeded
                 .with_label_values(&[&identity])
                 .set(count as i64),
-            Metric::ClientTxFailed { identity, count } => self
-                .client_tx_failed
+            Metric::ClientTxForwardFailed { identity, count } => self
+                .client_tx_forward_failed
                 .with_label_values(&[&identity])
                 .set(count as i64),
             Metric::ClientLatency { identity, latency } => self
                 .client_latency
                 .with_label_values(&[&identity])
                 .observe(latency),
+            Metric::ChainTxFinalized => self.chain_tx_timeout.inc(),
+            Metric::ChainTxTimeout => self.chain_tx_finalized.inc(),
             Metric::ServerRpcTxAccepted => self.server_rpc_tx_accepted.inc(),
             Metric::ServerRpcTxBytesIn { bytes } => self.server_rpc_tx_bytes_in.inc_by(bytes),
         }
@@ -102,9 +116,11 @@ impl MetricsStore {
 #[derive(Debug)]
 pub enum Metric {
     ClientTxReceived { identity: String, count: u64 },
-    ClientTxSucceeded { identity: String, count: u64 },
-    ClientTxFailed { identity: String, count: u64 },
+    ClientTxForwardSucceeded { identity: String, count: u64 },
+    ClientTxForwardFailed { identity: String, count: u64 },
     ClientLatency { identity: String, latency: f64 },
+    ChainTxFinalized,
+    ChainTxTimeout,
     ServerRpcTxAccepted,
     ServerRpcTxBytesIn { bytes: u64 },
 }

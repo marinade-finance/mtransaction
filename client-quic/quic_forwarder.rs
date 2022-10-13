@@ -1,4 +1,4 @@
-use crate::grpc_client::pb::Tx;
+use crate::grpc_client::pb::Transaction;
 use base64::decode;
 use log::{error, info};
 use solana_client::{
@@ -12,19 +12,24 @@ use std::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-pub fn forward_tx(connection_cache: Arc<ConnectionCache>, tx: String, tpu: SocketAddr) {
-    let tx = decode(tx).unwrap();
+pub fn forward_transaction(
+    connection_cache: Arc<ConnectionCache>,
+    signature: String,
+    transaction_data_b64: String,
+    tpu: SocketAddr,
+) {
+    let wire_transaction = decode(transaction_data_b64).unwrap();
     let conn = connection_cache.get_connection(&tpu);
-    if let Err(err) = conn.send_wire_transaction(tx) {
-        error!("Failed to send the tx: {}", err);
+    if let Err(err) = conn.send_wire_transaction(wire_transaction) {
+        error!("Failed to send the transaction: {}", err);
     }
-    info!("Tx -> {}", &tpu);
+    info!("Tx {} -> {}", signature, &tpu);
 }
 
 pub fn spawn_quic_forwarded(
     identity: Option<Keypair>,
     tpu_addr: Option<IpAddr>,
-) -> UnboundedSender<Tx> {
+) -> UnboundedSender<Transaction> {
     let mut connection_cache = ConnectionCache::new(DEFAULT_TPU_CONNECTION_POOL_SIZE);
     if let (Some(identity), Some(tpu_addr)) = (identity, tpu_addr) {
         if let Err(err) = connection_cache.update_client_certificate(&identity, tpu_addr) {
@@ -36,23 +41,30 @@ pub fn spawn_quic_forwarded(
         );
     }
 
-    let (tx_queue, mut rx) = tokio::sync::mpsc::unbounded_channel::<crate::grpc_client::pb::Tx>();
+    let (tx_transactions, mut rx_transactions) =
+        tokio::sync::mpsc::unbounded_channel::<crate::grpc_client::pb::Transaction>();
     {
         tokio::spawn(async move {
             let connection_cache = Arc::new(connection_cache);
-            while let Some(tx) = rx.recv().await {
-                info!("Forwarding tx {:?}", &tx);
-                for tpu in tx.tpu {
-                    let tx_data = tx.data.clone();
+            while let Some(transaction) = rx_transactions.recv().await {
+                info!("Forwarding tx {:?}", &transaction.signature);
+                for tpu in transaction.tpu {
+                    let tx_data = transaction.data.clone();
+                    let tx_signature = transaction.signature.clone();
                     let connection_cache = connection_cache.clone();
                     tokio::task::spawn_blocking(move || {
                         let tpu = tpu.parse().unwrap();
-                        crate::quic_forwarder::forward_tx(connection_cache, tx_data, tpu);
+                        crate::quic_forwarder::forward_transaction(
+                            connection_cache,
+                            tx_signature,
+                            tx_data,
+                            tpu,
+                        );
                     });
                 }
             }
         });
     }
 
-    tx_queue
+    tx_transactions
 }

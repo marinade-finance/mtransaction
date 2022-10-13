@@ -35,8 +35,8 @@ process.on('uncaughtException', (err) => {
 
 class Metrics {
     tx_received = 0
-    tx_succeeded = 0
-    tx_failed = 0
+    tx_forward_succeeded = 0
+    tx_forward_failed = 0
 }
 
 function connect(millisecondsToWait) {
@@ -61,7 +61,7 @@ function connect(millisecondsToWait) {
       call.write({ metrics })
     }
 
-    const processTx = ({ data }) => {
+    const processTransaction = ({ data }) => {
         metrics.tx_received++
         logger.info('Received tx', { data })
         try {
@@ -70,16 +70,16 @@ function connect(millisecondsToWait) {
             }
             cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' })
                 .then(() => {
-                    metrics.tx_succeeded++
+                    metrics.tx_forward_succeeded++
                     logger.info("Tx forwarded", { data })
                 })
                 .catch((err) => {
-                    metrics.tx_failed++
+                    metrics.tx_forward_failed++
                     logger.info("Forward failed!", { err, data })
                 })
         } catch (err) {
             logger.error('Failed to process tx', { err })
-            metrics.tx_failed++
+            metrics.tx_forward_failed++
         }
     }
     const processPing = ({ id }) => {
@@ -104,9 +104,9 @@ function connect(millisecondsToWait) {
         setTimeout(() => connect(millisecondsToWait), millisecondsToWait);
     }
 
-    call.on('data', ({ tx, ping }) => {
-        if (tx) {
-            processTx(tx)
+    call.on('data', ({ transaction, ping }) => {
+        if (transaction) {
+            processTransaction(transaction)
         }
         if (ping) {
             processPing(ping)
