@@ -29,7 +29,14 @@ make cert-client cmd=sign
 ```
 Install CA certificate:
 ```bash
+# as root
 curl -LSfs https://public.marinade.finance/mtx.ca.cert -o /etc/ssl/certs/mtx.ca.cert
+```
+Install MTX client:
+```bash
+# as root
+curl -LSfs https://public.marinade.finance/mtx-client-quic -o /usr/local/bin/mtx-client-quic
+chmod +x /usr/local/bin/mtx-client-quic
 ```
 
 ## Development
