@@ -64,34 +64,36 @@ function connect(millisecondsToWait) {
       call.write({ metrics })
     }
 
-    const processTransaction = ({ data }) => {
+    const processTransaction = (data) => {
         const now = new Date()
 
-        while (throttleList.length >= throttleLimit && throttleList.some(item => item - now < 500)) {
             logger.info('Waiting for other tx to process', throttleList.length)
+        if (throttleList.length >= throttleLimit && throttleList.some(item => now - item < 500)) {
             setTimeout(() => {}, 100)
-        }
-
-        try {
-            if (!cluster) {
-                throw new Error('Not connected to the cluster!')
+            processTransaction(data)
+        } else {
+            try {
+                if (!cluster) {
+                    throw new Error('Not connected to the cluster!')
+                }
+                throttleList.push(now)
+                cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' })
+                    .then(() => {
+                        metrics.tx_forward_succeeded++
+                        logger.info("Tx forwarded", { data })
+                    })
+                    .catch((err) => {
+                        metrics.tx_forward_failed++
+                        logger.info("Forward failed!", { err, data })
+                    })
+                    .finally(() => {
+                        throttleList = throttleList.filter(item => now - item > 500)
+                    })
+            } catch (err) {
+                logger.error('Failed to process tx', { err })
+                metrics.tx_forward_failed++
+                throttleList = throttleList.filter(item => now - item > 500)
             }
-            cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' })
-                .then(() => {
-                    metrics.tx_forward_succeeded++
-                    logger.info("Tx forwarded", { data })
-                })
-                .catch((err) => {
-                    metrics.tx_forward_failed++
-                    logger.info("Forward failed!", { err, data })
-                })
-                .finally(() => {
-                    throttleList = throttleList.filter(item => !(item - now > 1000))
-                })
-        } catch (err) {
-            logger.error('Failed to process tx', { err })
-            metrics.tx_forward_failed++
-            throttleList = throttleList.filter(item => !(item - now > 1000))
         }
     }
     const processPing = ({ id }) => {
@@ -120,7 +122,7 @@ function connect(millisecondsToWait) {
         if (transaction) {
             metrics.tx_received++
             logger.info('Received tx', transaction.data)
-            processTransaction(transaction)
+            processTransaction(transaction.data)
         }
         if (ping) {
             processPing(ping)
