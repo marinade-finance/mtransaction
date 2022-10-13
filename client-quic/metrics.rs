@@ -1,10 +1,23 @@
-// use solana_client::connection_cache::{ConnectionCache, DEFAULT_TPU_CONNECTION_POOL_SIZE};
-// use solana_sdk::signature::{read_keypair_file, Keypair};
-// use std::sync::Arc;
-// use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
-//
-// use env_logger::Env;
-// use log::{error, info, warn};
-// use std::time::Duration;
-// use structopt::StructOpt;
-// use tokio_stream::StreamExt;
+use crate::grpc_client::pb;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[derive(Default)]
+pub struct Metrics {
+    pub tx_received: AtomicU64,
+    pub tx_forward_succeeded: AtomicU64,
+    pub tx_forward_failed: AtomicU64,
+}
+
+impl From<&Metrics> for pb::RequestMessageEnvelope {
+    fn from(metrics: &Metrics) -> Self {
+        pb::RequestMessageEnvelope {
+            metrics: Some(pb::Metrics {
+                tx_received: metrics.tx_received.load(Ordering::Relaxed),
+                tx_forward_succeeded: metrics.tx_forward_succeeded.load(Ordering::Relaxed),
+                tx_forward_failed: metrics.tx_forward_failed.load(Ordering::Relaxed),
+                version: crate::VERSION.to_string(),
+            }),
+            ..Default::default()
+        }
+    }
+}

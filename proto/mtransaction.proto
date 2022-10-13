@@ -41,4 +41,5 @@ message Metrics {
   uint64 tx_received = 1;
   uint64 tx_forward_succeeded = 2;
   uint64 tx_forward_failed = 3;
+  string version = 4;
 }

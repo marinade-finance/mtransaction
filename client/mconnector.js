@@ -4,8 +4,10 @@ const path = require("path")
 const protoLoader = require('@grpc/proto-loader')
 const winston = require('winston')
 
-const PROTO_PATH = path.join(__dirname, '..', 'proto', 'mtransaction.proto')
-const packageDefinition = protoLoader.loadSync(PROTO_PATH, {keepCase: true})
+const version = 'node-0.0.0-alpha'
+
+const PROTO_PATH = path.join(__dirname, '..', 'proto', 'mtransaction.proto');
+const packageDefinition = protoLoader.loadSync(PROTO_PATH, {keepCase: true});
 
 const grpc = require('@grpc/grpc-js')
 const validatorProto = grpc.loadPackageDefinition(packageDefinition).validator

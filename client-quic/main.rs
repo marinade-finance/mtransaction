@@ -3,11 +3,15 @@ pub mod metrics;
 pub mod quic_forwarder;
 
 use crate::grpc_client::spawn_grpc_client;
+use crate::metrics::Metrics;
 use crate::quic_forwarder::spawn_quic_forwarded;
 use env_logger::Env;
 use log::info;
 use solana_sdk::signature::read_keypair_file;
+use std::sync::Arc;
 use structopt::StructOpt;
+
+pub const VERSION: &str = "rust-quic-0.0.0-alpha";
 
 #[derive(Debug, StructOpt)]
 struct Params {
@@ -43,7 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (None, None),
     };
 
-    let tx_transactions = spawn_quic_forwarded(identity, tpu_addr);
+    let metrics = Arc::new(Metrics::default());
+
+    let tx_transactions = spawn_quic_forwarded(identity, tpu_addr, metrics.clone());
 
     spawn_grpc_client(
         params.grpc_url.parse().unwrap(),
@@ -51,6 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params.tls_grpc_client_key,
         params.tls_grpc_client_cert,
         tx_transactions,
+        metrics.clone(),
     )
     .await?;
 
