@@ -1,14 +1,14 @@
-const fs = require('fs');
+const fs = require('fs')
 const web3 = require('@solana/web3.js')
-const path = require("path");
-const protoLoader = require('@grpc/proto-loader');
-const winston = require('winston');
+const path = require("path")
+const protoLoader = require('@grpc/proto-loader')
+const winston = require('winston')
 
-const PROTO_PATH = path.join(__dirname, '..', 'proto', 'mtransaction.proto');
-const packageDefinition = protoLoader.loadSync(PROTO_PATH, {keepCase: true});
+const PROTO_PATH = path.join(__dirname, '..', 'proto', 'mtransaction.proto')
+const packageDefinition = protoLoader.loadSync(PROTO_PATH, {keepCase: true})
 
-const grpc = require('@grpc/grpc-js');
-const validatorProto = grpc.loadPackageDefinition(packageDefinition).validator;
+const grpc = require('@grpc/grpc-js')
+const validatorProto = grpc.loadPackageDefinition(packageDefinition).validator
 
 const getEnvironmentVariable = (key, def) => {
   const val = process.env[key] ?? def
@@ -27,7 +27,7 @@ const Logger = winston.createLogger({
     ),
     defaultMeta: { service: 'mtx-client-js' },
     transports: [new winston.transports.Console()],
-});
+})
 
 process.on('uncaughtException', (err) => {
     console.log('Caught exception: ' + err + err.stack)
@@ -51,24 +51,24 @@ function connect(millisecondsToWait) {
         fs.readFileSync(getEnvironmentVariable('TLS_GRPC_SERVER_CERT')),
         fs.readFileSync(getEnvironmentVariable('TLS_GRPC_CLIENT_KEY')),
         fs.readFileSync(getEnvironmentVariable('TLS_GRPC_CLIENT_CERT')),
-    );
-    const mtransactionClient = new validatorProto.MTransaction(getEnvironmentVariable('GRPC_SERVER_ADDR'), ssl_creds);
-    const call = mtransactionClient.TxStream();
+    )
+    const mtransactionClient = new validatorProto.MTransaction(getEnvironmentVariable('GRPC_SERVER_ADDR'), ssl_creds)
+    const call = mtransactionClient.TxStream()
 
     const sendPong = (id) => {
       logger.info('Sending pong', { id })
       call.write({ pong: { id } })
     }
     const sendMetrics = () => {
-      logger.info('Sending pong', { metrics })
+      logger.info('Sending metrics', { metrics })
       call.write({ metrics })
     }
 
     const processTransaction = (data) => {
         const now = new Date()
 
-            logger.info('Waiting for other tx to process', throttleList.length)
         if (throttleList.length >= throttleLimit && throttleList.some(item => now - item < 500)) {
+            logger.info('Waiting for other tx to process', throttleList.length)
             setTimeout(() => {}, 100)
             processTransaction(data)
         } else {
@@ -96,6 +96,7 @@ function connect(millisecondsToWait) {
             }
         }
     }
+
     const processPing = ({ id }) => {
         logger.info('Received ping', { id })
         sendPong(id)
@@ -115,7 +116,7 @@ function connect(millisecondsToWait) {
 
     function restart(millisecondsToWait) {
         logger.warn('Will restart the stream', { millisecondsToWait })
-        setTimeout(() => connect(millisecondsToWait), millisecondsToWait);
+        setTimeout(() => connect(millisecondsToWait), millisecondsToWait)
     }
 
     call.on('data', ({ transaction, ping }) => {
@@ -127,21 +128,21 @@ function connect(millisecondsToWait) {
         if (ping) {
             processPing(ping)
         }
-        millisecondsToWait = 500;
-    });
+        millisecondsToWait = 500
+    })
     call.on('end', () => {
-        millisecondsToWait += millisecondsToWait;
-        mtransactionClient.close();
+        millisecondsToWait += millisecondsToWait
+        mtransactionClient.close()
         logger.error('Connection has been closed.')
-        restart(millisecondsToWait);
-    });
+        restart(millisecondsToWait)
+    })
     call.on('error', (err) => {
         logger.error('Connection error.', { err })
-    });
+    })
 }
 
 function main() {
-    connect(500);
+    connect(500)
 }
 
-main();
+main()
