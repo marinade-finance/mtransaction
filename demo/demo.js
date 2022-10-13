@@ -87,12 +87,13 @@ const sendPriorityTransaction = async (
   return result.json()
 }
 
+let lamports = 1
 const buildDemoTx = (user, toPubkey, recentBlockhash) => new web3.Transaction({
   recentBlockhash
 }).add(web3.SystemProgram.transfer({
   fromPubkey: user.publicKey,
   toPubkey: toPubkey,
-  lamports: 1,
+  lamports: lamports++,
 }))
 
 const genDemoTxs = function * (user, toPubkey, recentBlockhash) {

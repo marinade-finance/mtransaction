@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := build-all
 
 cert-server:
-	./scripts/cert-server.bash
+	./scripts/cert-server.bash $(cmd) $(host)
 
 cert-client:
 	./scripts/cert-client.bash $(cmd) $(validator)

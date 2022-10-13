@@ -90,8 +90,8 @@ impl MetricsStore {
                 .client_latency
                 .with_label_values(&[&identity])
                 .observe(latency),
-            Metric::ChainTxFinalized => self.chain_tx_timeout.inc(),
-            Metric::ChainTxTimeout => self.chain_tx_finalized.inc(),
+            Metric::ChainTxFinalized => self.chain_tx_finalized.inc(),
+            Metric::ChainTxTimeout => self.chain_tx_timeout.inc(),
             Metric::ServerRpcTxAccepted => self.server_rpc_tx_accepted.inc(),
             Metric::ServerRpcTxBytesIn { bytes } => self.server_rpc_tx_bytes_in.inc_by(bytes),
         }

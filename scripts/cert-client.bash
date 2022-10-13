@@ -16,7 +16,7 @@ then
     echo "Usage: $0 req <validator>"
     exit 1
   fi
-  openssl req -newkey rsa:2048 -nodes -keyout "$CERTS/client.$IDENTITY.key" -out "$CERTS/client.req" -subj "/CN=$IDENTITY" -addext extendedKeyUsage=clientAuth
+  openssl req -newkey rsa:4096 -nodes -keyout "$CERTS/client.$IDENTITY.key" -out "$CERTS/client.req" -subj "/CN=$IDENTITY" -addext extendedKeyUsage=clientAuth
 
   cat "$CERTS/client.req"
 elif [[ $CMD == "sign" ]]

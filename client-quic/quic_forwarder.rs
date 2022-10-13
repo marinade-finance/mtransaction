@@ -41,10 +41,7 @@ pub fn spawn_quic_forwarded(
         if let Err(err) = connection_cache.update_client_certificate(&identity, tpu_addr) {
             error!("Failed to update client certificate: {}", err);
         }
-        info!(
-            "Updated QUIC certificate with identity {:?} at {}",
-            &identity, tpu_addr
-        );
+        info!("Updated QUIC certificate");
     }
 
     let (tx_transactions, mut rx_transactions) =

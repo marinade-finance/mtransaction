@@ -7,7 +7,8 @@ TBD
 ## Server
 Generate certificates:
 ```bash
-make cert-server
+make cert-server cmd=ca
+make cert-server cmd=sign host=localhost
 make cert-client cmd=req identity=foo
 make cert-client cmd=sign
 ```
@@ -26,14 +27,10 @@ Generate certificate:
 make cert-client cmd=req validator=Validator1
 make cert-client cmd=sign
 ```
-Get server certificate:
+Install CA certificate:
 ```bash
-export HOST=mtx-dev-eu-central-1.marinade.finance
-export PORT=50051
-echo -n | openssl s_client -connect $HOST:$PORT | openssl x509 > ./certs/$HOST.cert
+curl -LSfs https://public.marinade.finance/mtx.ca.cert -o /etc/ssl/certs/mtx.ca.cert
 ```
-## Tester
-TBD
 
 ## Development
 Before building the rust server, you need:

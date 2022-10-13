@@ -171,7 +171,7 @@ pub fn spawn_tx_signature_watcher(
 
     tokio::spawn(async move {
         let mut signature_timeouts: BinaryHeap<SignatureWatchTimeout> = BinaryHeap::new();
-        let mut siganture_channels = StreamMap::new();
+        let mut signature_channels = StreamMap::new();
         let mut signature_unsubscibers = HashMap::new();
 
         loop {
@@ -185,11 +185,13 @@ pub fn spawn_tx_signature_watcher(
                             _=> break
                         };
                         if let Some(oldest) = signature_timeouts.pop() {
-                            error!("Tx is NOT on-chain: {}", oldest.signature);
-                            siganture_channels.remove(&oldest.signature);
-                            signature_unsubscibers.remove(&oldest.signature);
-                            if let Err(err) = tx_metrics.send(vec![Metric::ChainTxTimeout]) {
-                                error!("Failed to propagate metrics: {}", err);
+                            if signature_unsubscibers.contains_key(&oldest.signature) {
+                                error!("Tx is NOT on-chain: {}", oldest.signature);
+                                signature_channels.remove(&oldest.signature);
+                                signature_unsubscibers.remove(&oldest.signature);
+                                if let Err(err) = tx_metrics.send(vec![Metric::ChainTxTimeout]) {
+                                    error!("Failed to propagate metrics: {}", err);
+                                }
                             }
                         }
                     }
@@ -200,7 +202,7 @@ pub fn spawn_tx_signature_watcher(
                     let (signature_notifications, unsubscribe) = pubsub_client
                         .signature_subscribe(&signature, None)
                         .await?;
-                    siganture_channels.insert(signature.clone(), signature_notifications);
+                    signature_channels.insert(signature.clone(), signature_notifications);
                     signature_timeouts.push(SignatureWatchTimeout {
                         subscribed_at: tokio::time::Instant::now(),
                         signature: signature.clone(),
@@ -209,10 +211,10 @@ pub fn spawn_tx_signature_watcher(
                     info!("Will watch for {:?}", &signature);
                 },
 
-                Some((signature, response)) = siganture_channels.next() => {
+                Some((signature, response)) = signature_channels.next() => {
                     info!("Tx is on-chain: {}, slot: {}", signature, response.context.slot);
                     signature_unsubscibers.remove(&signature);
-                    siganture_channels.remove(&signature);
+                    signature_channels.remove(&signature);
                     if let Err(err) = tx_metrics.send(vec![Metric::ChainTxFinalized]) {
                         error!("Failed to propagate metrics: {}", err);
                     }
