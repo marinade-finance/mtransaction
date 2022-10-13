@@ -33,6 +33,9 @@ process.on('uncaughtException', (err) => {
     console.log('Caught exception: ' + err + err.stack)
 })
 
+let throttleList = []
+const throttleLimit = getEnvironmentVariable('THROTTLE_LIMIT')
+
 class Metrics {
     tx_received = 0
     tx_forward_succeeded = 0
@@ -62,8 +65,13 @@ function connect(millisecondsToWait) {
     }
 
     const processTransaction = ({ data }) => {
-        metrics.tx_received++
-        logger.info('Received tx', { data })
+        const now = new Date()
+
+        while (throttleList.length >= throttleLimit && throttleList.some(item => item - now < 500)) {
+            logger.info('Waiting for other tx to process', throttleList.length)
+            setTimeout(() => {}, 100)
+        }
+
         try {
             if (!cluster) {
                 throw new Error('Not connected to the cluster!')
@@ -77,9 +85,13 @@ function connect(millisecondsToWait) {
                     metrics.tx_forward_failed++
                     logger.info("Forward failed!", { err, data })
                 })
+                .finally(() => {
+                    throttleList = throttleList.filter(item => !(item - now > 1000))
+                })
         } catch (err) {
             logger.error('Failed to process tx', { err })
             metrics.tx_forward_failed++
+            throttleList = throttleList.filter(item => !(item - now > 1000))
         }
     }
     const processPing = ({ id }) => {
@@ -106,6 +118,8 @@ function connect(millisecondsToWait) {
 
     call.on('data', ({ transaction, ping }) => {
         if (transaction) {
+            metrics.tx_received++
+            logger.info('Received tx', transaction.data)
             processTransaction(transaction)
         }
         if (ping) {
