@@ -47,6 +47,7 @@ run-client-local:
 	TLS_GRPC_CLIENT_KEY=./certs/client.$(client).key \
 	TLS_GRPC_CLIENT_CERT=./certs/client.$(client).cert \
 	GRPC_SERVER_ADDR=localhost:50051 \
+	THROTTLE_LIMIT=100 \
 		node ./client/mconnector.js
 
 run-client:

@@ -3,6 +3,7 @@ const web3 = require('@solana/web3.js')
 const path = require("path")
 const protoLoader = require('@grpc/proto-loader')
 const winston = require('winston')
+const { EventEmitter, once } = require('events')
 
 const version = 'node-0.0.0-alpha'
 
@@ -35,13 +36,30 @@ process.on('uncaughtException', (err) => {
     console.log('Caught exception: ' + err + err.stack)
 })
 
-let throttleList = []
-const throttleLimit = getEnvironmentVariable('THROTTLE_LIMIT')
-
 class Metrics {
     tx_received = 0
     tx_forward_succeeded = 0
     tx_forward_failed = 0
+}
+
+const EVENT_WAKE_CONSUMER = 'EVENT_WAKE_CONSUMER'
+const transactionsQueue = []
+const transactionsQueueEvent = new EventEmitter()
+let concurrentTransactions = 0
+const maxConcurrentTransactions = getEnvironmentVariable('THROTTLE_LIMIT')
+
+const forwardTransactions = async () => {
+    while (true) {
+        if (concurrentTransactions >= maxConcurrentTransactions || transactionsQueue.length === 0) {
+            await once(transactionsQueueEvent, EVENT_WAKE_CONSUMER)
+        } else {
+            concurrentTransactions++
+            transactionsQueue.shift()().catch(() => {}).finally(() => {
+                concurrentTransactions--
+                transactionsQueueEvent.emit(EVENT_WAKE_CONSUMER)
+            })
+        }
+    }
 }
 
 function connect(millisecondsToWait) {
@@ -58,44 +76,25 @@ function connect(millisecondsToWait) {
     const call = mtransactionClient.TxStream()
 
     const sendPong = (id) => {
-      logger.info('Sending pong', { id })
-      call.write({ pong: { id } })
+        logger.info('Sending pong', { id })
+        call.write({ pong: { id } })
     }
     const sendMetrics = () => {
-      logger.info('Sending metrics', { metrics })
-      call.write({ metrics })
+        logger.info('Sending metrics', { metrics })
+        call.write({ metrics })
     }
 
-    const processTransaction = (data) => {
-        const now = new Date()
-
-        if (throttleList.length >= throttleLimit && throttleList.some(item => now - item < 500)) {
-            logger.info('Waiting for other tx to process', throttleList.length)
-            setTimeout(() => {}, 100)
-            processTransaction(data)
-        } else {
-            try {
-                if (!cluster) {
-                    throw new Error('Not connected to the cluster!')
-                }
-                throttleList.push(now)
-                cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' })
-                    .then(() => {
-                        metrics.tx_forward_succeeded++
-                        logger.info("Tx forwarded", { data })
-                    })
-                    .catch((err) => {
-                        metrics.tx_forward_failed++
-                        logger.info("Forward failed!", { err, data })
-                    })
-                    .finally(() => {
-                        throttleList = throttleList.filter(item => now - item > 500)
-                    })
-            } catch (err) {
-                logger.error('Failed to process tx', { err })
-                metrics.tx_forward_failed++
-                throttleList = throttleList.filter(item => now - item > 500)
+    const processTransaction = async (data) => {
+        try {
+            if (!cluster) {
+                throw new Error('Not connected to the cluster!')
             }
+            await cluster.sendRawTransaction(Buffer.from(data, 'base64'), { preflightCommitment: 'processed' })
+            metrics.tx_forward_succeeded++
+            logger.info("Tx forwarded", { data })
+        } catch (err) {
+            logger.error('Failed to forward tx', { err })
+            metrics.tx_forward_failed++
         }
     }
 
@@ -125,7 +124,8 @@ function connect(millisecondsToWait) {
         if (transaction) {
             metrics.tx_received++
             logger.info('Received tx', transaction.data)
-            processTransaction(transaction.data)
+            transactionsQueue.push(() => processTransaction(transaction.data))
+            transactionsQueueEvent.emit(EVENT_WAKE_CONSUMER)
         }
         if (ping) {
             processPing(ping)
@@ -145,6 +145,7 @@ function connect(millisecondsToWait) {
 
 function main() {
     connect(500)
+    forwardTransactions()
 }
 
 main()
