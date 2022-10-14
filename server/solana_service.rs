@@ -9,7 +9,7 @@ use solana_sdk::{
 };
 use std::cmp::Ordering;
 use std::{
-    collections::{BinaryHeap, HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     error::Error,
     str::FromStr,
     sync::Arc,
@@ -170,7 +170,7 @@ pub fn spawn_tx_signature_watcher(
     let minute = tokio::time::Duration::from_secs(60);
 
     tokio::spawn(async move {
-        let mut signature_timeouts: BinaryHeap<SignatureWatchTimeout> = BinaryHeap::new();
+        let mut signature_timeouts: VecDeque<SignatureWatchTimeout> = VecDeque::new();
         let mut signature_channels = StreamMap::new();
         let mut signature_unsubscibers = HashMap::new();
 
@@ -178,13 +178,13 @@ pub fn spawn_tx_signature_watcher(
             tokio::select! {
                 _ = prune_subscriptions.next() => {
                     loop {
-                        match signature_timeouts.peek() {
+                        match signature_timeouts.front() {
                             Some(oldest) => if oldest.subscribed_at.elapsed() < minute {
                                 break
                             },
                             _=> break
                         };
-                        if let Some(oldest) = signature_timeouts.pop() {
+                        if let Some(oldest) = signature_timeouts.pop_front() {
                             if signature_unsubscibers.contains_key(&oldest.signature) {
                                 error!("Tx is NOT on-chain: {}", oldest.signature);
                                 signature_channels.remove(&oldest.signature);
@@ -195,7 +195,7 @@ pub fn spawn_tx_signature_watcher(
                             }
                         }
                     }
-                    info!("Signature watchers remaining: {}", signature_timeouts.len());
+                    info!("Signature watchers active: {}", signature_timeouts.len());
                 },
 
                 Some(signature) = rx_signature.next() => {
@@ -203,7 +203,7 @@ pub fn spawn_tx_signature_watcher(
                         .signature_subscribe(&signature, None)
                         .await?;
                     signature_channels.insert(signature.clone(), signature_notifications);
-                    signature_timeouts.push(SignatureWatchTimeout {
+                    signature_timeouts.push_back(SignatureWatchTimeout {
                         subscribed_at: tokio::time::Instant::now(),
                         signature: signature.clone(),
                     });

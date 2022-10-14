@@ -25,7 +25,7 @@ curl localhost:3000 -X POST -H "Content-Type: application/json" -d '{"jsonrpc": 
 Generate certificate:
 ```bash
 make cert-client cmd=req validator=Validator1
-make cert-client cmd=sign
+make cert-client cmd=sign # performed on Marinade side
 ```
 Install CA certificate:
 ```bash
