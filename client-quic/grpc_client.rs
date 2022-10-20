@@ -29,7 +29,7 @@ fn process_ping(ping: Ping, tx_upstream_transactions: UnboundedSender<RequestMes
 }
 
 fn process_transaction(transaction: Transaction, tx_transactions: UnboundedSender<Transaction>) {
-    info!("Enqueuing tx: {:?}", &transaction.signature);
+    // info!("Enqueuing tx: {:?}", &transaction.signature);
     if let Err(err) = tx_transactions.send(transaction) {
         error!("Failed to enqueue tx: {}", err);
     }

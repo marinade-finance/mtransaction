@@ -32,6 +32,12 @@ struct Params {
 
     #[structopt(long = "tpu-addr")]
     tpu_addr: Option<String>,
+
+    #[structopt(long = "blackhole")]
+    blackhole: bool,
+
+    #[structopt(long = "throttle-parallel", default_value = "100")]
+    throttle_parallel: usize,
 }
 
 #[tokio::main]
@@ -49,7 +55,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let metrics = Arc::new(Metrics::default());
 
-    let tx_transactions = spawn_quic_forwarded(identity, tpu_addr, metrics.clone());
+    let tx_transactions = spawn_quic_forwarded(
+        identity,
+        tpu_addr,
+        metrics.clone(),
+        params.blackhole,
+        params.throttle_parallel,
+    );
 
     spawn_grpc_client(
         params.grpc_url.parse().unwrap(),

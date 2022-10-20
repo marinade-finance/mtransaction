@@ -121,7 +121,7 @@ impl Balancer {
         signature: String,
         data: String,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        info!("Tx {} {} -> ", &signature, &data);
+        info!("Forwarding tx {}...", &signature);
         if let Some(tx_consumer) = self.pick_tx_consumer() {
             let result = tx_consumer
                 .tx

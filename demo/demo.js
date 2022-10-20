@@ -18,6 +18,9 @@ const TX_COUNT = Number(params['tx-count']) || 0
 const USER_WALLET_PATH = params['user-wallet'] || null
 const USER_WALLET = USER_WALLET_PATH ? walletFromFile(USER_WALLET_PATH) : web3.Keypair.generate()
 const TO_PUBKEY = params['to-pubkey'] || web3.Keypair.generate().publicKey
+const STARTING_LAMPORS = params['starting-lamports'] || 1
+
+const sentTxSignatures = []
 
 const fetchTxChallenge = async (pubKey) => {
   const txChallenge = await fetch(`${AUTH_API_BASE_URL}/auth/tx-challenge?pubkey=${pubKey}`, {
@@ -73,6 +76,7 @@ const sendPriorityTransaction = async (
   jwt,
   tx,
 ) => {
+  sentTxSignatures.push(tx.signature)
   const result = await fetch(`${MTX_URL}`, {
     method: 'post',
     body: JSON.stringify({
@@ -87,7 +91,7 @@ const sendPriorityTransaction = async (
   return result.json()
 }
 
-let lamports = 1
+let lamports = STARTING_LAMPORS
 const buildDemoTx = (user, toPubkey, recentBlockhash) => new web3.Transaction({
   recentBlockhash
 }).add(web3.SystemProgram.transfer({
@@ -133,7 +137,6 @@ const run = async () => {
   const toPubkey = TO_PUBKEY
 
   const authToken = await authenticate(user)
-  console.log('TOKEN', authToken)
 
   const { blockhash: recentBlockhash } = await cluster.getRecentBlockhash()
 
@@ -153,7 +156,7 @@ const run = async () => {
     const [s, ns] = process.hrtime(timer)
     const duration = s + ns / 1e9
     totalRequestsFinished++
-    console.log("Finished requests:", totalRequestsFinished, "Total time:", duration, "TPS:", totalRequestsFinished / duration)
+    process.stderr.write(`Finished requests: ${totalRequestsFinished}, Total time: ${duration}, TPS: ${totalRequestsFinished / duration}\n`)
   })
 
   for await (const signedTx of genSignedDemoTxs(user, toPubkey, recentBlockhash)) {
@@ -162,6 +165,8 @@ const run = async () => {
     }
     limitter.emit(Event.TASK_REQUEST, sendPriorityTransaction(authToken, signedTx))
   }
+
+  sentTxSignatures.forEach((signature) => console.log(bs58.encode(signature)))
 }
 
 run()

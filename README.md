@@ -32,11 +32,32 @@ Install CA certificate:
 # as root
 curl -LSfs https://public.marinade.finance/mtx.ca.cert -o /etc/ssl/certs/mtx.ca.cert
 ```
-Install MTX client:
+Install MTX QUIC client:
 ```bash
 # as root
 curl -LSfs https://public.marinade.finance/mtx-client-quic -o /usr/local/bin/mtx-client-quic
 chmod +x /usr/local/bin/mtx-client-quic
+```
+Run MTX QUIC client:
+```bash
+/usr/local/bin/mtx-client-quic \
+  --tls-grpc-ca-cert     /etc/ssl/certs/mtx.ca.cert \
+  --tls-grpc-client-key  /etc/ssl/certs/mtx.client.key \
+  --tls-grpc-client-cert /etc/ssl/certs/mtx.client.cert \
+  --grpc-url             https://mtx-perf-eu-central-1.marinade.finance:50051 \
+  --tpu-addr             x.x.x.x \
+  --identity             ./keys/key-validator-identity.json
+```
+Run nodeJS client:
+```bash
+export TLS_GRPC_SERVER_CERT=/etc/ssl/certs/mtx.ca.cert
+export TLS_GRPC_CLIENT_KEY=/etc/ssl/certs/mtx.client.key
+export TLS_GRPC_CLIENT_CERT=/etc/ssl/certs/mtx.client.cert
+export GRPC_SERVER_ADDR=mtx-dev-eu-central-1.marinade.finance:50051
+export SOLANA_CLUSTER_URL=http://localhost:8899
+export THROTTLE_LIMIT=200
+
+node ./client/mconnector.js
 ```
 
 ## Development

@@ -7,7 +7,6 @@ use solana_client::{
 use solana_sdk::{
     commitment_config::CommitmentConfig, native_token::LAMPORTS_PER_SOL, signature::Signature,
 };
-use std::cmp::Ordering;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error,
@@ -15,7 +14,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt, StreamMap};
+use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 
 pub fn solana_client(url: String, commitment: String) -> RpcClient {
     RpcClient::new_with_commitment(url, CommitmentConfig::from_str(&commitment).unwrap())
@@ -135,90 +134,84 @@ pub fn leaders_stream(
     Ok(rx)
 }
 
-#[derive(Eq, PartialEq)]
-struct SignatureWatchTimeout {
-    subscribed_at: tokio::time::Instant,
+struct SignatureRecord {
+    created_at: tokio::time::Instant,
     signature: Signature,
 }
-
-impl Ord for SignatureWatchTimeout {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .subscribed_at
-            .cmp(&self.subscribed_at)
-            .then_with(|| self.signature.cmp(&other.signature))
-    }
-}
-impl PartialOrd for SignatureWatchTimeout {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
 pub fn spawn_tx_signature_watcher(
-    pubsub_client: Arc<PubsubClient>,
+    client: Arc<RpcClient>,
     tx_metrics: UnboundedSender<Vec<Metric>>,
 ) -> Result<UnboundedSender<Signature>, Box<dyn Error + Send + Sync>> {
     let (tx_signature, rx_signature) = unbounded_channel::<Signature>();
 
     let mut rx_signature = UnboundedReceiverStream::new(rx_signature);
 
-    let mut prune_subscriptions = Box::pin(
-        tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(10)),
+    let mut bundle_subscriptions_signal = Box::pin(
+        tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(1)),
     );
 
-    let minute = tokio::time::Duration::from_secs(60);
+    let signature_check_after = tokio::time::Duration::from_secs(10);
+    let max_bundle_size = 250;
 
     tokio::spawn(async move {
-        let mut signature_timeouts: VecDeque<SignatureWatchTimeout> = VecDeque::new();
-        let mut signature_channels = StreamMap::new();
-        let mut signature_unsubscibers = HashMap::new();
+        let mut signature_queue: VecDeque<SignatureRecord> = Default::default();
 
         loop {
             tokio::select! {
-                _ = prune_subscriptions.next() => {
+                _ = bundle_subscriptions_signal.next() => {
                     loop {
-                        match signature_timeouts.front() {
-                            Some(oldest) => if oldest.subscribed_at.elapsed() < minute {
-                                break
-                            },
-                            _=> break
-                        };
-                        if let Some(oldest) = signature_timeouts.pop_front() {
-                            if signature_unsubscibers.contains_key(&oldest.signature) {
-                                error!("Tx is NOT on-chain: {}", oldest.signature);
-                                signature_channels.remove(&oldest.signature);
-                                signature_unsubscibers.remove(&oldest.signature);
-                                if let Err(err) = tx_metrics.send(vec![Metric::ChainTxTimeout]) {
-                                    error!("Failed to propagate metrics: {}", err);
-                                }
+                        let mut to_be_bundled_count = 0;
+                        for record in signature_queue.iter() {
+                            if record.created_at.elapsed() > signature_check_after && to_be_bundled_count < max_bundle_size {
+                                to_be_bundled_count += 1;
+                            } else {
+                                break;
                             }
                         }
-                    }
-                    info!("Signature watchers active: {}", signature_timeouts.len());
-                },
+                        if to_be_bundled_count == 0 {
+                            break;
+                        }
+                        {
+                            let client = client.clone();
+                            let bundle = signature_queue.drain(0..to_be_bundled_count).map(|r| r.signature).collect::<Vec<_>>();
+                            let tx_metrics = tx_metrics.clone();
 
+                            tokio::spawn(async move {
+                                match client.get_signature_statuses(&bundle) {
+                                    Ok(response) => {
+                                        for signature_status in response.value {
+                                            if let Some(known_status) = signature_status {
+                                                info!("Signature status {:?}", known_status);
+                                                if let Err(err) = tx_metrics.send(vec![Metric::ChainTxFinalized, Metric::ChainTxSlot { slot: known_status.slot }]) {
+                                                    error!("Failed to propagate metrics: {}", err);
+                                                }
+                                            } else {
+                                                if let Err(err) = tx_metrics.send(vec![Metric::ChainTxTimeout]) {
+                                                    error!("Failed to propagate metrics: {}", err);
+                                                }
+                                            }
+                                        }
+                                    },
+                                    Err(err) => {
+                                        let timeout_metrics = std::iter::repeat(Metric::ChainTxTimeout).take(bundle.len()).collect();
+                                        if let Err(err) = tx_metrics.send(timeout_metrics) {
+                                            error!("Failed to propagate metrics: {}", err);
+                                        }
+                                        error!("Failed to get signature statuses: {}", err);
+                                    }
+                                }
+
+                            });
+                        }
+                    }
+                },
                 Some(signature) = rx_signature.next() => {
-                    let (signature_notifications, unsubscribe) = pubsub_client
-                        .signature_subscribe(&signature, None)
-                        .await?;
-                    signature_channels.insert(signature.clone(), signature_notifications);
-                    signature_timeouts.push_back(SignatureWatchTimeout {
-                        subscribed_at: tokio::time::Instant::now(),
+                    signature_queue.push_back(SignatureRecord {
+                        created_at: tokio::time::Instant::now(),
                         signature: signature.clone(),
                     });
-                    signature_unsubscibers.insert(signature.clone(), unsubscribe);
                     info!("Will watch for {:?}", &signature);
                 },
-
-                Some((signature, response)) = signature_channels.next() => {
-                    info!("Tx is on-chain: {}, slot: {}", signature, response.context.slot);
-                    signature_unsubscibers.remove(&signature);
-                    signature_channels.remove(&signature);
-                    if let Err(err) = tx_metrics.send(vec![Metric::ChainTxFinalized]) {
-                        error!("Failed to propagate metrics: {}", err);
-                    }
-                }
                 else => break,
             }
         }

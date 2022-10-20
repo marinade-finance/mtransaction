@@ -71,8 +71,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let tx_metrics = metrics::spawn(params.metrics_addr.parse().unwrap());
 
-    let tx_signatures =
-        spawn_tx_signature_watcher(pubsub_client.clone(), tx_metrics.clone()).unwrap();
+    let tx_signatures = spawn_tx_signature_watcher(client.clone(), tx_metrics.clone()).unwrap();
 
     {
         let balancer = balancer.clone();
