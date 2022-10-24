@@ -1,10 +1,11 @@
+pub mod bundler;
 pub mod grpc_client;
 pub mod metrics;
 pub mod quic_forwarder;
 
 use crate::grpc_client::spawn_grpc_client;
 use crate::metrics::Metrics;
-use crate::quic_forwarder::spawn_quic_forwarded;
+use crate::quic_forwarder::spawn_quic_forwarder;
 use env_logger::Env;
 use log::info;
 use solana_sdk::signature::read_keypair_file;
@@ -55,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let metrics = Arc::new(Metrics::default());
 
-    let tx_transactions = spawn_quic_forwarded(
+    let tx_transactions = spawn_quic_forwarder(
         identity,
         tpu_addr,
         metrics.clone(),
