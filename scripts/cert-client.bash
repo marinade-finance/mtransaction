@@ -19,6 +19,17 @@ then
   openssl req -newkey rsa:4096 -nodes -keyout "$CERTS/client.$IDENTITY.key" -out "$CERTS/client.req" -subj "/CN=$IDENTITY" -addext extendedKeyUsage=clientAuth
 
   cat "$CERTS/client.req"
+elif [[ $CMD == "req-mac" ]]
+then
+  IDENTITY="$2"
+  if [[ -z "$IDENTITY" ]]
+  then
+    echo "Usage: $0 req-mac <validator>"
+    exit 1
+  fi
+  openssl req -newkey rsa:4096 -nodes -keyout "$CERTS/client.$IDENTITY.key" -out "$CERTS/client.req" -config <(printf 'extendedKeyUsage=clientAuth\n[dn]\nCN='"$IDENTITY"'\n[req]\nprompt=no\ndistinguished_name = dn\n')
+
+  cat "$CERTS/client.req"
 elif [[ $CMD == "sign" ]]
 then
   VALIDATOR=$(openssl req -noout -in "./certs/client.req" --subject | awk '{print $NF}')
