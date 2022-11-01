@@ -9,7 +9,7 @@ use solana_client::{
     rpc_config::RpcSendTransactionConfig,
     rpc_request::{RpcError, RpcRequest},
 };
-use solana_sdk::{commitment_config::CommitmentLevel, signature::Signature};
+use solana_sdk::commitment_config::CommitmentLevel;
 use solana_transaction_status::UiTransactionEncoding;
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::Semaphore;
@@ -40,19 +40,17 @@ impl Forwarder for RpcForwarder {
             let throttle_permit = throttle_parallel.acquire_owned().await.unwrap();
 
             info!("Tx {} -> {}", transaction.signature, &rpc_client.url());
-            let _ = match rpc_client
-                .send::<Signature>(
+            let config = RpcSendTransactionConfig {
+                encoding: Some(UiTransactionEncoding::Base64),
+                preflight_commitment: Some(CommitmentLevel::Processed),
+                max_retries: None,
+                skip_preflight: true,
+                min_context_slot: None,
+            };
+            match rpc_client
+                .send::<String>(
                     RpcRequest::SendTransaction,
-                    json!([
-                        transaction.data,
-                        RpcSendTransactionConfig {
-                            encoding: Some(UiTransactionEncoding::Base64),
-                            preflight_commitment: Some(CommitmentLevel::Processed),
-                            max_retries: None,
-                            skip_preflight: true,
-                            min_context_slot: None,
-                        }
-                    ]),
+                    json!([transaction.data, config]),
                 )
                 .await
             {

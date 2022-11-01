@@ -29,7 +29,6 @@ fn process_ping(ping: Ping, tx_upstream_transactions: UnboundedSender<RequestMes
 }
 
 fn process_transaction(transaction: Transaction, tx_transactions: UnboundedSender<Transaction>) {
-    // info!("Enqueuing tx: {:?}", &transaction.signature);
     if let Err(err) = tx_transactions.send(transaction) {
         error!("Failed to enqueue tx: {}", err);
     }
@@ -113,14 +112,11 @@ async fn get_tls_config(
     let tls = if let (Some(ca_cert), Some(client_key), Some(client_cert)) =
         (tls_ca_cert, tls_client_key, tls_client_cert)
     {
-        info!("Loading CA from {}.", ca_cert);
+        info!("Loading CA from {}", ca_cert);
         let ca_cert = tokio::fs::read(ca_cert).await?;
         let ca_cert = Certificate::from_pem(ca_cert);
 
-        info!(
-            "Loading client TLS from {} and {}.",
-            client_cert, client_key
-        );
+        info!("Loading client TLS from {} and {}", client_cert, client_key);
         let client_cert = tokio::fs::read(client_cert).await?;
         let client_key = tokio::fs::read(client_key).await?;
         let client_identity = Identity::from_pem(client_cert, client_key);
