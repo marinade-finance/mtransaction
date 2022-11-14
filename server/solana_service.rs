@@ -86,6 +86,7 @@ pub fn get_tpu_by_identity(
         .collect())
 }
 
+const MAX_LEADERS: u64 = 5;
 pub fn leaders_stream(
     client: Arc<RpcClient>,
     pubsub_client: Arc<PubsubClient>,
@@ -109,13 +110,12 @@ pub fn leaders_stream(
                     schedule = get_leader_schedule(client.as_ref())?;
                 },
                 Some(slot_info) = slot_notifications.next() => {
-                    let leader_at = slot_info.slot % 432000; // todo get from epoch info
-                    let next_leader_at = leader_at + 4; // todo constant
-                    let current_leaders: HashSet<_> = vec![schedule.get(&leader_at), schedule.get(&next_leader_at)]
-                        .into_iter()
+                    let current_leaders: HashSet<_> = (0..MAX_LEADERS)
+                        .map(|nth_leader| nth_leader * 4 + (slot_info.slot % 432000))
+                        .map(|slot| schedule.get(&slot))
                         .flatten()
                         .cloned()
-                        .collect(); // todo separate function
+                        .collect();
                     debug!("Slot: {:?}, {:?}", slot_info, &current_leaders);
                     if !current_leaders.eq(&last_leaders) {
                         if let Err(err) = tx.send(current_leaders.clone()) {
