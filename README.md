@@ -18,7 +18,7 @@ make run-server
 ```
 Send transaction:
 ```bash
-curl localhost:3000 -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "sendPriorityTransaction", "id":123, "params":["foo"] }'
+curl localhost:3000 -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "sendPriorityTransaction", "id":123, "params":["ARshF1FLgiVW50Ni22v0MvVwbG+lzVF3Lny0RXdel49BaJ+h7CD3SsAA2611yJgrzywPPoH61NqEVnEamW8d2ggBAAEDB0RIKu9gtXbw72njHgZGjO2GvCj5asjUDjoWRvAjtgVSd+bmVQdeIet9vYadHhwEFFONs9iJcGGojpal6ubMaQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0zi3p2jurWfGuUPD/3Ny0mYgNYCpRQhozRYVCJdLYzkBAgIAAQwCAAAARQAAAAAAAAA="] }'
 ```
 
 ## Client
@@ -53,7 +53,7 @@ Run nodeJS client:
 export TLS_GRPC_SERVER_CERT=/etc/ssl/certs/mtx.ca.cert
 export TLS_GRPC_CLIENT_KEY=/etc/ssl/certs/mtx.client.key
 export TLS_GRPC_CLIENT_CERT=/etc/ssl/certs/mtx.client.cert
-export GRPC_SERVER_ADDR=mtx-dev-eu-central-1.marinade.finance:50051
+export GRPC_SERVER_ADDR=mtx-perf-eu-central-1.marinade.finance:50051
 export SOLANA_CLUSTER_URL=http://localhost:8899
 export THROTTLE_LIMIT=200
 

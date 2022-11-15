@@ -6,3 +6,4 @@ certs/*.cert
 certs/*.key
 certs/*.req
 certs/*.srl
+certs/*.pub

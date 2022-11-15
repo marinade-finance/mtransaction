@@ -1,8 +1,10 @@
+use crate::auth::{authenticate, load_public_key, Auth};
 use crate::balancer::*;
 use crate::metrics::Metric;
 use bincode::config::Options;
 use jsonrpc_core::{BoxFuture, MetaIoHandler, Metadata, Result};
 use jsonrpc_derive::rpc;
+use jsonrpc_http_server::hyper::http::header::AUTHORIZATION;
 use jsonrpc_http_server::*;
 use log::{error, info};
 use serde::{Deserialize, Serialize};
@@ -14,6 +16,7 @@ use tokio::sync::{mpsc::UnboundedSender, RwLock};
 
 #[derive(Clone)]
 pub struct RpcMetadata {
+    auth: std::result::Result<Auth, String>,
     balancer: Arc<RwLock<Balancer>>,
     tx_metrics: UnboundedSender<Vec<Metric>>,
     tx_signatures: UnboundedSender<Signature>,
@@ -48,7 +51,21 @@ impl Rpc for RpcServer {
         data: String,
         _config: Option<SendPriorityTransactionConfig>,
     ) -> BoxFuture<Result<()>> {
-        info!("RPC method sendTransaction called.");
+        let auth = match meta.auth {
+            Ok(auth) => auth,
+            Err(err) => {
+                error!("Authentication error: {}", err);
+                return Box::pin(async move {
+                    Err(jsonrpc_core::error::Error {
+                        code: jsonrpc_core::error::ErrorCode::ServerError(403),
+                        message: "Failed to authenticate".into(),
+                        data: None,
+                    })
+                });
+            }
+        };
+
+        info!("RPC method sendPriorityTransaction called: {:?}", auth);
         if let Err(err) = meta.tx_metrics.send(vec![
             Metric::ServerRpcTxAccepted,
             Metric::ServerRpcTxBytesIn {
@@ -118,18 +135,32 @@ pub fn get_io_handler() -> MetaIoHandler<RpcMetadata> {
 
 pub fn spawn_rpc_server(
     rpc_addr: std::net::SocketAddr,
+    jwt_public_key_path: String,
     balancer: Arc<RwLock<Balancer>>,
     tx_metrics: UnboundedSender<Vec<Metric>>,
     tx_signatures: UnboundedSender<Signature>,
 ) -> Server {
     info!("Spawning RPC server.");
+    let public_key = Arc::new(
+        load_public_key(jwt_public_key_path)
+            .expect("Failed to load public key used to verify JWTs"),
+    );
 
     ServerBuilder::with_meta_extractor(
         get_io_handler(),
-        move |_req: &hyper::Request<hyper::Body>| RpcMetadata {
-            balancer: balancer.clone(),
-            tx_metrics: tx_metrics.clone(),
-            tx_signatures: tx_signatures.clone(),
+        move |req: &hyper::Request<hyper::Body>| {
+            let auth_header = req
+                .headers()
+                .get(AUTHORIZATION)
+                .map(|header_value| header_value.to_str().unwrap().to_string());
+
+            RpcMetadata {
+                auth: authenticate((*public_key).clone(), auth_header)
+                    .map_err(|err| err.to_string()),
+                balancer: balancer.clone(),
+                tx_metrics: tx_metrics.clone(),
+                tx_signatures: tx_signatures.clone(),
+            }
         },
     )
     .cors(DomainsValidation::AllowOnly(vec![

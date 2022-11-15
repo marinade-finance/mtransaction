@@ -12,6 +12,8 @@ name = "mtx-client-quic"
 path = "client-quic/main.rs"
 
 [dependencies]
+openssl = { version = "0.10" }
+jwt = { version = "0.16.0", features = ["openssl"]}
 async-stream = "0.3"
 futures = { version = "0.3", default-features = false, features = ["alloc"] }
 prost = "0.11"

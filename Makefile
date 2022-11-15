@@ -32,7 +32,8 @@ run-server: build-server
 		--stake-override-sol      1000000 2000000 \
 		--tls-grpc-server-cert    ./certs/localhost.cert \
 		--tls-grpc-server-key     ./certs/localhost.key \
-		--tls-grpc-ca-cert        ./certs/ca.cert
+		--tls-grpc-ca-cert        ./certs/ca.cert \
+		--jwt-public-key          ./certs/jwtRS256.key.pub
 
 run-client-quic-local: build-client-quic
 	cargo run --bin mtx-client-quic -- \

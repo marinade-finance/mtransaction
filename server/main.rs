@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod balancer;
 pub mod grpc_server;
 pub mod metrics;
@@ -55,6 +56,9 @@ struct Params {
 
     #[structopt(long = "stake-override-sol")]
     stake_override_sol: Vec<u64>,
+
+    #[structopt(long = "jwt-public-key")]
+    jwt_public_key: String,
 }
 
 #[tokio::main]
@@ -120,6 +124,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let _rpc_server = spawn_rpc_server(
         params.rpc_addr.parse().unwrap(),
+        params.jwt_public_key,
         balancer.clone(),
         tx_metrics.clone(),
         tx_signatures,
