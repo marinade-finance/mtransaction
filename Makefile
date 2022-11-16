@@ -13,15 +13,15 @@ build-server:
 build-server-release:
 	cargo build --bin mtx-server --release
 
-build-client-quic:
-	cargo build --bin mtx-client-quic
+build-client:
+	cargo build --bin mtx-client
 
-build-client-quic-release:
-	cargo build --bin mtx-client-quic --release
+build-client-release:
+	cargo build --bin mtx-client --release
 
-build-all: build-server build-client-quic
+build-all: build-server build-client
 
-build-all-release: build-server-release build-client-quic-release
+build-all-release: build-server-release build-client-release
 
 clean:
 	rm -rf target certs/*.cert certs/*.key certs/*.srl certs/*.req demo/node_modules client/node_modules

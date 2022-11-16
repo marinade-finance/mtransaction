@@ -19,3 +19,15 @@ jobs:
         with:
           command: build
           args: --release
+      - name: Archive mtx-server
+        uses: actions/upload-artifact@v3
+        with:
+          name: mtx-server
+          path: |
+            target/release/mtx-server
+      - name: Archive mtx-client
+        uses: actions/upload-artifact@v3
+        with:
+          name: mtx-client
+          path: |
+            target/release/mtx-client

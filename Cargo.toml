@@ -8,8 +8,8 @@ name = "mtx-server"
 path = "server/main.rs"
 
 [[bin]]
-name = "mtx-client-quic"
-path = "client-quic/main.rs"
+name = "mtx-client"
+path = "client/main.rs"
 
 [dependencies]
 openssl = { version = "0.10" }

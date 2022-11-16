@@ -35,12 +35,12 @@ curl -LSfs https://public.marinade.finance/mtx.ca.cert -o /etc/ssl/certs/mtx.ca.
 Install MTX QUIC client:
 ```bash
 # as root
-curl -LSfs https://public.marinade.finance/mtx-client-quic -o /usr/local/bin/mtx-client-quic
-chmod +x /usr/local/bin/mtx-client-quic
+curl -LSfs https://public.marinade.finance/mtx-client -o /usr/local/bin/mtx-client
+chmod +x /usr/local/bin/mtx-client
 ```
 Run MTX QUIC client:
 ```bash
-/usr/local/bin/mtx-client-quic \
+/usr/local/bin/mtx-client \
   --tls-grpc-ca-cert     /etc/ssl/certs/mtx.ca.cert \
   --tls-grpc-client-key  /etc/ssl/certs/mtx.client.key \
   --tls-grpc-client-cert /etc/ssl/certs/mtx.client.cert \
