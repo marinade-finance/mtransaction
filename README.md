@@ -1,72 +1,163 @@
 # mTransaction
-TBD
+This project is in a *closed BETA* phase. If you are a validator/dApp/Trader/whoever might benefit from using this project, feel free to reach out to us e.g. on discord and we will be happy to test this product with you!
 
-## Architecture
-TBD
+## What is mTransaction?
+mTransaction is an RPC-like service that allows Solana users to send transactions to block-producers.
+With QUIC coming to Solana, validators now have two connection pools: One is shared for transaction senders without stake, one is dedicated to transaction senders with stake.
+Normal users who have no stake may have difficulties connecting to the block producer in times of network congestion.
+mTransaction service utilizes stake of validators who choose to run `mtx-client`.
+When a user wants to send a transaction, the user can send it to mTransaction service - the transaction is then forwarded to validators running `mtx-client` and then to the block-producer.
+Block-producer is then more likely to accept incoming connection, because the connection uses the certificate of a staked validator and _should_ use the pool of guaranteed connections.
+Unlike normal RPC services we only provide a single RPC method: `sendPriorityTransaction`.
 
-## Server
-Generate certificates:
-```bash
-make cert-server cmd=ca
-make cert-server cmd=sign host=localhost
-make cert-client cmd=req identity=foo
-make cert-client cmd=sign
-```
-Run:
-```bash
-make run-server
-```
-Send transaction:
-```bash
-curl localhost:3000 -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "sendPriorityTransaction", "id":123, "params":["ARshF1FLgiVW50Ni22v0MvVwbG+lzVF3Lny0RXdel49BaJ+h7CD3SsAA2611yJgrzywPPoH61NqEVnEamW8d2ggBAAEDB0RIKu9gtXbw72njHgZGjO2GvCj5asjUDjoWRvAjtgVSd+bmVQdeIet9vYadHhwEFFONs9iJcGGojpal6ubMaQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0zi3p2jurWfGuUPD/3Ny0mYgNYCpRQhozRYVCJdLYzkBAgIAAQwCAAAARQAAAAAAAAA="] }'
-```
+![mTransaction schema](./mtx-schema.png)
 
-## Client
-Generate certificate:
+## For validators
+`mtx-client` is a thin gRPC client running on a validator node as a single binary side-car.
+This client connects to the `mtx-server` and waits for transactions to be received.
+This means that validators do not have to open any ports as the connection is initiated from their side to `mtx-server`.
+
+There are two options when running the client:
+1) Validator's identity is passed as an argument the `mtx-client`. `mtx-client` uses the identity to sign QUIC requests to block-producers.
+No changes to how validator node runs are needed.
+2) Validator enables `--rpc-port 8899 --full-rpc-api --private-rpc` on their node. (Validator should make sure that the RPC endpoint is only accessible from `127.0.0.1` and not from outside sources)
+### Run MTX
+To run `mtx-client` you need a certificate and `mtx-client` binary.
 ```bash
-make cert-client cmd=req validator=Validator1
-make cert-client cmd=sign # performed on Marinade side
-```
-Install CA certificate:
-```bash
-# as root
-curl -LSfs https://public.marinade.finance/mtx.ca.cert -o /etc/ssl/certs/mtx.ca.cert
-```
-Install MTX QUIC client:
-```bash
-# as root
-curl -LSfs https://public.marinade.finance/mtx-client -o /usr/local/bin/mtx-client
-chmod +x /usr/local/bin/mtx-client
-```
-Run MTX QUIC client:
-```bash
-/usr/local/bin/mtx-client \
+# Clone this repository
+git clone https://github.com/marinade-finance/mtransaction
+
+# Step into the directory
+cd mtransaction
+
+# If you want to build the `mtx-client` yourself:
+#
+# # Install gRPC dependency
+# sudo apt install protobuf-compiler
+#
+# # Build `mtx-client` (Or see latest release to download the binary)
+# make build-client-release
+#
+# # Install `mtx-client`
+# sudo cp ./target/release/mtx-client /usr/local/bin/mtx-client
+
+# If you do not want to build `mtx-client` yourself, download it
+sudo curl -LSfs https://public.marinade.finance/mtx-client -o /usr/local/bin/mtx-client
+sudo chmod +x /usr/local/bin/mtx-client
+
+# Generate certificate used by `mtx-client` to connect to `mtx-server`
+# Replace IDENTITY by public key of your validator's identity
+make cert-client cmd=req validator=IDENTITY
+
+# !!! IMPORTANT STEP
+# Send ./certs/client.req to Marinade to have it signed by Marinade's certificate authority
+# You should then receive `client.IDENTITY.cert`
+
+# Adjust privileges
+chmod 0644 ./certs/client.*
+
+# Install Marinade's `mtx-server` certificate
+sudo curl -LSfs https://public.marinade.finance/mtx.ca.cert -o /etc/ssl/certs/mtx.ca.cert
+
+# Setup systemd service file
+sudo cat > /etc/systemd/system/multi-user.target.wants/mtx-client.service <<EOF
+[Unit]
+Description=MTX Client
+
+[Service]
+ExecStart=/usr/local/bin/mtx-client \
   --tls-grpc-ca-cert     /etc/ssl/certs/mtx.ca.cert \
-  --tls-grpc-client-key  /etc/ssl/certs/mtx.client.key \
-  --tls-grpc-client-cert /etc/ssl/certs/mtx.client.cert \
-  --grpc-url             https://mtx-perf-eu-central-1.marinade.finance:50051 \
-  --tpu-addr             x.x.x.x \
-  --identity             ./keys/key-validator-identity.json
+  --tls-grpc-client-key  /<path to the repository>/certs/mtx.IDENTITY.key \
+  --tls-grpc-client-cert /<path to the repository>/certs/mtx.IDENTITY.cert \
+  --grpc-url             https://****.marinade.finance:50051 `# You will be assigned URL during onboarding` \
+  --tpu-addr             TPU_ADDR `# Only use with option 1); Replace TPU_ADDR by your public IP` \
+  --identity             /.../key.json `# Only use with option 1); Provide path to your identity`
+# --rpc-url              http://127.0.0.1:8899 `# Only use with option 2)`
+
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat <<EOF | sudo tee /lib/systemd/system/mtx-client.service
+[Unit]
+Description=MTX Client
+
+[Service]
+ExecStart=/usr/local/bin/mtx-client \\
+  --tls-grpc-ca-cert     /etc/ssl/certs/mtx.ca.cert \\
+  --tls-grpc-client-key  /home/ubuntu/mtransaction/certs/mtx.IDENTITY.key \\
+  --tls-grpc-client-cert /home/ubuntu/mtransaction/certs/mtx.IDENTITY.cert \\
+  --grpc-url             https://mtx-perf-eu-central-1.marinade.finance:50051 `# You will be assigned URL during onboarding` \\
+  --tpu-addr             TPU_ADDR `# Only use with option 1); Replace TPU_ADDR by your public IP` \\
+  --identity             /.../key.json `# Only use with option 1); Provide path to your identity`
+# --rpc-url              http://127.0.0.1:8899 `# Only use with option 2)`
+
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload systemd services
+sudo systemctl daemon-reload
+
+# Enable mtx service on reboot
+sudo systemctl enable mtx-client
+
+# Start mtx service
+sudo service mtx-client start
+
+# Observe logs
+sudo journalctl -u mtx-client -f
 ```
-Run nodeJS client:
+
+## For transaction senders
+Proper authentication/billing/... will be added later and this service is now provided for free to users of our closed beta.
+If you are interested in trying this service, reach out to us on discord.
+
+### Send transaction
 ```bash
-export TLS_GRPC_SERVER_CERT=/etc/ssl/certs/mtx.ca.cert
-export TLS_GRPC_CLIENT_KEY=/etc/ssl/certs/mtx.client.key
-export TLS_GRPC_CLIENT_CERT=/etc/ssl/certs/mtx.client.cert
-export GRPC_SERVER_ADDR=mtx-perf-eu-central-1.marinade.finance:50051
-export SOLANA_CLUSTER_URL=http://localhost:8899
-export THROTTLE_LIMIT=200
-
-node ./client/mconnector.js
+curl RPC_URL -X POST -H "Content-Type: application/json" -H "Authorization: Bearer ***" -d '{
+  "jsonrpc": "2.0",
+  "method": "sendPriorityTransaction",
+  "id": 1,
+  "params": ["ARshF1FLgiVW50Ni22v0MvVwbG+lzVF3Lny0RXdel49BaJ+h7CD3SsAA2611yJgrzywPPoH61NqEVnEamW8d2ggBAAEDB0RIKu9gtXbw72njHgZGjO2GvCj5asjUDjoWRvAjtgVSd+bmVQdeIet9vYadHhwEFFONs9iJcGGojpal6ubMaQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0zi3p2jurWfGuUPD/3Ny0mYgNYCpRQhozRYVCJdLYzkBAgIAAQwCAAAARQAAAAAAAAA="]
+}'
+```
+```js
+const tx = new web3.Transaction(...).add(...)
+await tx.sign(...)
+await fetch(..., {
+  method: 'post',
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'sendPriorityTransaction',
+    id: 1,
+    params: [Buffer.from(tx.serialize()).toString('base64')],
+  }),
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ***' }
+})
 ```
 
-## Development
-Before building the rust server, you need:
+## For developers
+Before building the rust binaries, you need (apart from rust toolchain):
 ```bash
 # Ubuntu
-apt update && apt upgrade -y
-apt install -y protobuf-compiler libprotobuf-dev
+sudo apt install -y protobuf-compiler libprotobuf-dev
 
 # Alpine
 apk add protoc protobuf-dev
+```
+
+Useful commands:
+```bash
+# Prepare local CA
+make cert-server cmd=ca
+make cert-server cmd=sign host=localhost
+
+# Sign client certificate request
+make cert-client cmd=sign
 ```
