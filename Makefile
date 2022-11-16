@@ -35,8 +35,8 @@ run-server: build-server
 		--tls-grpc-ca-cert        ./certs/ca.cert \
 		--jwt-public-key          ./certs/jwtRS256.key.pub
 
-run-client-quic-local: build-client-quic
-	cargo run --bin mtx-client-quic -- \
+run-client-local: build-client
+	cargo run --bin mtx-client -- \
 		--tls-grpc-ca-cert     ./certs/ca.cert \
 		--tls-grpc-client-key  ./certs/client.$(client).key \
 		--tls-grpc-client-cert ./certs/client.$(client).cert \
