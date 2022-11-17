@@ -80,26 +80,6 @@ RestartSec=10s
 [Install]
 WantedBy=multi-user.target
 EOF
-cat <<EOF | sudo tee /lib/systemd/system/mtx-client.service
-[Unit]
-Description=MTX Client
-
-[Service]
-ExecStart=/usr/local/bin/mtx-client \\
-  --tls-grpc-ca-cert     /etc/ssl/certs/mtx.ca.cert \\
-  --tls-grpc-client-key  /home/ubuntu/mtransaction/certs/mtx.IDENTITY.key \\
-  --tls-grpc-client-cert /home/ubuntu/mtransaction/certs/mtx.IDENTITY.cert \\
-  --grpc-url             https://mtx-perf-eu-central-1.marinade.finance:50051 `# You will be assigned URL during onboarding` \\
-  --tpu-addr             TPU_ADDR `# Only use with option 1); Replace TPU_ADDR by your public IP` \\
-  --identity             /.../key.json `# Only use with option 1); Provide path to your identity`
-# --rpc-url              http://127.0.0.1:8899 `# Only use with option 2)`
-
-Restart=on-failure
-RestartSec=10s
-
-[Install]
-WantedBy=multi-user.target
-EOF
 
 # Reload systemd services
 sudo systemctl daemon-reload
