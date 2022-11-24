@@ -60,7 +60,7 @@ chmod 0644 ./certs/client.*
 sudo curl -LSfs https://public.marinade.finance/mtx.ca.cert -o /etc/ssl/certs/mtx.ca.cert
 
 # Setup systemd service file
-sudo cat > /etc/systemd/system/multi-user.target.wants/mtx-client.service <<EOF
+cat <<EOF | sudo tee /lib/systemd/system/mtx-client.service
 [Unit]
 Description=MTX Client
 
