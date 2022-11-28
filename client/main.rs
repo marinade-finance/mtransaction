@@ -41,7 +41,7 @@ struct Params {
     #[structopt(long = "blackhole")]
     blackhole: bool,
 
-    #[structopt(long = "throttle-parallel", default_value = "100")]
+    #[structopt(long = "throttle-parallel", default_value = "1000")]
     throttle_parallel: usize,
 }
 
