@@ -31,6 +31,11 @@ git clone https://github.com/marinade-finance/mtransaction
 cd mtransaction
 
 # If you want to build the `mtx-client` yourself:
+# # Make sure you have the neccesary rust-specific dependencies:
+# # 1) rust:
+# curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# # 2) Other rust develepment packages:
+# sudo apt install make build-essential pkg-config libssl-dev
 #
 # # Install gRPC dependency
 # sudo apt install protobuf-compiler
@@ -42,7 +47,7 @@ cd mtransaction
 # sudo cp ./target/release/mtx-client /usr/local/bin/mtx-client
 
 # If you do not want to build `mtx-client` yourself, download it
-sudo curl -LSfs https://public.marinade.finance/mtx-client -o /usr/local/bin/mtx-client
+sudo curl -LSfs 'https://github.com/marinade-finance/mtransaction/releases/download/refs%2Fheads%2Fmaster/mtx-client' -o /usr/local/bin/mtx-client
 sudo chmod +x /usr/local/bin/mtx-client
 
 # Generate certificate used by `mtx-client` to connect to `mtx-server`
