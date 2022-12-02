@@ -17,6 +17,24 @@ use tonic::{
     transport::{Certificate, Channel, ClientTlsConfig, Identity, Uri},
     Status,
 };
+use sysinfo::{ProcessExt, System, SystemExt};
+
+pub const DEFAULT_VALIDATOR_WARMUP_MINUTES: u64 = 15;
+
+fn validator_check() -> Result<String, String> {
+    let sys = System::new_all();
+    for process in sys.processes_by_name("solana-valid") {
+        if process.run_time() / 60 > DEFAULT_VALIDATOR_WARMUP_MINUTES {
+            return Ok("Validator is running.".to_string());
+        } else
+        {
+            error!("Validator is not warmed up. Time left: {} min.", DEFAULT_VALIDATOR_WARMUP_MINUTES - (process.run_time() / 60));
+            return Err("Validator is not warmed up.".to_string());
+        }
+    }
+    error!("Validator is not running.");
+    Err("Validator is not running.".to_string())
+}
 
 fn process_ping(ping: Ping, tx_upstream_transactions: UnboundedSender<RequestMessageEnvelope>) {
     info!("Sending pong: {}", ping.id);
@@ -58,7 +76,7 @@ async fn mtx_stream(
     client: &mut MTransactionClient<Channel>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<Transaction>,
     metrics: Arc<Metrics>,
-) {
+) -> Result<String,String> {
     let metrics_stream = async_stream::stream! {
         loop {
             yield metrics.as_ref().into();
@@ -79,6 +97,10 @@ async fn mtx_stream(
     let mut response_stream = response.into_inner();
 
     loop {
+        let result = validator_check();
+        if result.is_err() {
+            return Err("Validator not connected.".to_string()) 
+        }
         tokio::select! {
             metrics = metrics_stream.next() => {
                 if let Some(metrics) = metrics {
@@ -102,6 +124,7 @@ async fn mtx_stream(
             }
         }
     }
+    Err("Stream closing.".to_string())
 }
 
 async fn get_tls_config(
@@ -145,18 +168,39 @@ pub async fn spawn_grpc_client(
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;
+    let mut validator_online = true;
 
-    info!("Opening the gRPC channel.");
-    let channel = match tls {
-        Some(tls) => Channel::builder(grpc_url).tls_config(tls)?,
-        _ => Channel::builder(grpc_url),
+    loop {
+        if validator_online {
+            info!("Opening the gRPC channel.");
+            let channel = match tls {
+                Some(ref tls) => Channel::builder(grpc_url.clone()).tls_config(tls.clone())?,
+                _ => Channel::builder(grpc_url.clone()),
+            }
+            .connect()
+            .await?;
+            info!("Streaming from gRPC server.");
+
+            let mut client = MTransactionClient::new(channel.clone());
+            let result = mtx_stream(&mut client, tx_transactions.clone(), metrics.clone()).await;
+
+            if result.is_err() {
+                if result.unwrap_err().contains("Validator") {
+                    validator_online = false;
+                }
+            }
+        }
+        if !validator_online {
+            warn!("Retrying streaming from gRPC server in 30s.");
+            sleep(Duration::from_secs(30)).await;
+            let result = validator_check();
+            if result.is_ok() {
+                validator_online = true;
+            }
+            continue;
+        } else {
+            break;
+        }
     }
-    .connect()
-    .await?;
-
-    info!("Streaming from gRPC server.");
-    let mut client = MTransactionClient::new(channel);
-    mtx_stream(&mut client, tx_transactions, metrics).await;
-
     Ok(())
 }
