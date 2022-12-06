@@ -38,6 +38,9 @@ pub trait Rpc {
         data: String,
         config: Option<SendPriorityTransactionConfig>,
     ) -> BoxFuture<Result<()>>;
+
+    #[rpc(name = "getHealth")]
+    fn get_health(&self) -> Result<()>;
 }
 
 #[derive(Default)]
@@ -124,6 +127,10 @@ impl Rpc for RpcServer {
             }
         })
     }
+
+    fn get_health(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub fn get_io_handler() -> MetaIoHandler<RpcMetadata> {
@@ -166,6 +173,7 @@ pub fn spawn_rpc_server(
     .cors(DomainsValidation::AllowOnly(vec![
         AccessControlAllowOrigin::Any,
     ]))
+    .health_api(("/health", "getHealth"))
     .threads(64)
     .start_http(&rpc_addr)
     .expect("Unable to start TCP RPC server")
