@@ -11,11 +11,10 @@ use solana_sdk::{signature::Keypair, transport::TransportError};
 use std::{
     net::IpAddr,
     sync::{atomic::Ordering, Arc},
-    time::Duration
 };
 use tokio::{
     sync::Semaphore,
-    time::timeout
+    time::{Duration, timeout},
 };
 
 const SEND_TRANSACTION_TIMEOUT_MS: u64 = 10000;
