@@ -7,12 +7,17 @@ use solana_client::{
     connection_cache::{ConnectionCache, DEFAULT_TPU_CONNECTION_POOL_SIZE},
     nonblocking::tpu_connection::TpuConnection,
 };
-use solana_sdk::signature::Keypair;
+use solana_sdk::{signature::Keypair, transport::TransportError};
 use std::{
     net::IpAddr,
     sync::{atomic::Ordering, Arc},
 };
-use tokio::sync::Semaphore;
+use tokio::{
+    sync::Semaphore,
+    time::{Duration, timeout},
+};
+
+const SEND_TRANSACTION_TIMEOUT_MS: u64 = 10000;
 
 pub struct QuicForwarder {
     metrics: Arc<Metrics>,
@@ -56,15 +61,33 @@ impl QuicForwarder {
 
             info!("Tx {} -> {}", transaction.signature, &tpu);
             let conn = connection_cache.get_nonblocking_connection(&tpu);
-            if let Err(err) = conn.send_wire_transaction(&wire_transaction).await {
-                error!("Failed to send the transaction: {}", err);
-                metrics.tx_forward_failed.fetch_add(1, Ordering::Relaxed);
-            } else {
-                metrics.tx_forward_succeeded.fetch_add(1, Ordering::Relaxed);
-            }
 
+            let result = timeout(
+                Duration::from_millis(SEND_TRANSACTION_TIMEOUT_MS),
+                conn.send_wire_transaction(&wire_transaction),
+            )
+            .await;
+
+            Self::handle_send_result(result, metrics);
             drop(throttle_permit);
         });
+    }
+
+    fn handle_send_result(result: Result<Result<(), TransportError>, tokio::time::error::Elapsed>, metrics: Arc<Metrics>) 
+    {
+        match result {
+            Ok(result) => {
+                if let Err(err) = result {
+                    error!("Failed to send the transaction: {}", err);
+                    metrics.tx_forward_failed.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    metrics.tx_forward_succeeded.fetch_add(1, Ordering::Relaxed);
+                }
+            },
+            Err(err) => {
+                error!("Timed out sending transaction {:?}", err);
+            }
+        }
     }
 }
 
