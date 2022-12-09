@@ -79,7 +79,7 @@ ExecStart=/usr/local/bin/mtx-client \\
   --identity             /.../key.json `# Only use with option 1); Provide path to your identity`
 # --rpc-url              http://127.0.0.1:8899 `# Only use with option 2)`
 
-Restart=on-failure
+Restart=always
 RestartSec=10s
 
 [Install]
