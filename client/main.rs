@@ -3,15 +3,19 @@ pub mod grpc_client;
 pub mod metrics;
 pub mod quic_forwarder;
 pub mod rpc_forwarder;
+pub mod watcher;
 
 use crate::forwarder::spawn_forwarder;
 use crate::grpc_client::spawn_grpc_client;
 use crate::metrics::Metrics;
+use crate::watcher::{connected, spawn_watcher, RETRY_TIME_IN_SECONDS};
 use env_logger::Env;
 use log::info;
 use solana_sdk::signature::read_keypair_file;
 use std::sync::Arc;
 use structopt::StructOpt;
+use tokio::time::sleep;
+use tokio_retry::strategy::FixedInterval;
 
 pub const VERSION: &str = "rust-0.0.0-alpha";
 
@@ -63,21 +67,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tx_transactions = spawn_forwarder(
         identity,
         tpu_addr,
-        params.rpc_url,
+        params.rpc_url.clone(),
         metrics.clone(),
         params.blackhole,
         params.throttle_parallel,
     );
 
-    spawn_grpc_client(
-        params.grpc_url.parse().unwrap(),
-        params.tls_grpc_ca_cert,
-        params.tls_grpc_client_key,
-        params.tls_grpc_client_cert,
-        tx_transactions,
-        metrics.clone(),
-    )
-    .await?;
+    match params.rpc_url {
+        None => {
+            spawn_grpc_client(
+                params.grpc_url.parse().unwrap(),
+                params.tls_grpc_ca_cert,
+                params.tls_grpc_client_key,
+                params.tls_grpc_client_cert,
+                tx_transactions,
+                metrics.clone(),
+            )
+            .await?;
+        }
+        Some(_) => {
+            let mut delays = FixedInterval::from_millis(RETRY_TIME_IN_SECONDS * 1000).take(3);
+            loop {
+                let mut watcher = spawn_watcher();
+                tokio::select! {
+                    _ = &mut watcher => {
+                        match delays.next() {
+                            Some(duration) => {
+                                sleep(duration).await;
+                            }
+                            None => break,
+                        }
+                    }
+
+                    _ = spawn_grpc_client(
+                        params.grpc_url.parse().unwrap(),
+                        params.tls_grpc_ca_cert.clone(),
+                        params.tls_grpc_client_key.clone(),
+                        params.tls_grpc_client_cert.clone(),
+                        tx_transactions.clone(),
+                        metrics.clone(),
+                    ), if connected() => {
+                        info!("Grpc client stopped.");
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     info!("Service stopped.");
     Ok(())
