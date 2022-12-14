@@ -1,5 +1,7 @@
-# mTransaction
-This project is in a *closed BETA* phase. If you are a validator/dApp/Trader/whoever might benefit from using this project, feel free to reach out to us e.g. on discord and we will be happy to test this product with you!
+# mTransaction, priority transactions on Solana
+
+## How to sign up for the closed BETA?
+This project is in a *closed BETA* phase. If you are a validator/dApp/Trader/whoever might benefit from using this project, reach out to us via [the validator signup](https://tally.so/r/mBEdAN) or [the searcher signup](https://tally.so/r/3xVMJk) and we will be happy to test this product with you! We're slowly onboarding new searchers and validators to the system.
 
 ## What is mTransaction?
 mTransaction is an RPC-like service that allows Solana users to send transactions to block-producers.
