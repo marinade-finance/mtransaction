@@ -37,7 +37,7 @@ pub trait Rpc {
         meta: Self::Metadata,
         data: String,
         config: Option<SendPriorityTransactionConfig>,
-    ) -> BoxFuture<Result<()>>;
+    ) -> BoxFuture<Result<String>>;
 
     #[rpc(name = "getHealth")]
     fn get_health(&self) -> Result<()>;
@@ -53,7 +53,7 @@ impl Rpc for RpcServer {
         meta: Self::Metadata,
         data: String,
         _config: Option<SendPriorityTransactionConfig>,
-    ) -> BoxFuture<Result<()>> {
+    ) -> BoxFuture<Result<String>> {
         let auth = match meta.auth {
             Ok(auth) => auth,
             Err(err) => {
@@ -118,7 +118,7 @@ impl Rpc for RpcServer {
                 .publish(signature.to_string(), data)
                 .await
             {
-                Ok(_) => Ok(()),
+                Ok(_) => Ok(signature.to_string()),
                 Err(_) => Err(jsonrpc_core::error::Error {
                     code: jsonrpc_core::error::ErrorCode::InternalError,
                     message: "Failed to forward the transaction".into(),
