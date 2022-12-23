@@ -6,11 +6,9 @@ pub mod rpc_forwarder;
 
 use crate::forwarder::spawn_forwarder;
 use crate::grpc_client::spawn_grpc_client;
-use crate::metrics::Metrics;
 use env_logger::Env;
 use log::info;
 use solana_sdk::signature::read_keypair_file;
-use std::sync::Arc;
 use structopt::StructOpt;
 
 pub const VERSION: &str = "rust-0.0.0-alpha";
@@ -35,6 +33,9 @@ struct Params {
     #[structopt(long = "tpu-addr")]
     tpu_addr: Option<String>,
 
+    #[structopt(long = "metrics-addr", default_value = "127.0.0.1:9091")]
+    metrics_addr: String,
+
     #[structopt(long = "rpc-url")]
     rpc_url: Option<String>,
 
@@ -58,13 +59,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (None, None),
     };
 
-    let metrics = Arc::new(Metrics::default());
+    let metrics = metrics::spawn_metrics(params.metrics_addr.parse().unwrap());
 
     let tx_transactions = spawn_forwarder(
         identity,
         tpu_addr,
         params.rpc_url,
-        metrics.clone(),
         params.blackhole,
         params.throttle_parallel,
     );
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params.tls_grpc_client_key,
         params.tls_grpc_client_cert,
         tx_transactions,
-        metrics.clone(),
+        metrics,
     )
     .await?;
 

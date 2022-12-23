@@ -1,5 +1,69 @@
-use crate::grpc_client::pb;
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::grpc_client::pb::{self, RequestMessageEnvelope};
+use lazy_static::lazy_static;
+use log::error;
+use prometheus::{register_int_counter, Encoder, IntCounter, TextEncoder};
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::time::sleep;
+
+use warp::Filter;
+
+const METRICS_SYNC_TIME_IN_S: u64 = 10;
+const METRICS_BUFFER_SIZE: usize = 1;
+
+lazy_static! {
+    pub static ref METRICS_STORE: Arc<Metrics> = Arc::new(Metrics::default());
+    pub static ref TX_RECEIVED_COUNT: IntCounter = register_int_counter!(
+        "tx_received",
+        "How many transactions were received by the client"
+    )
+    .unwrap();
+    pub static ref TX_FORWARD_SUCCEEDED_COUNT: IntCounter = register_int_counter!(
+        "tx_forward_succeeded",
+        "How many transactions were successfully forwarded"
+    )
+    .unwrap();
+    pub static ref TX_FORWARD_FAILED_COUNT: IntCounter = register_int_counter!(
+        "tx_forward_failed",
+        "How many transactions failed on the client side"
+    )
+    .unwrap();
+}
+fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
+    let (metrics_sender, metrics_receiver) =
+        tokio::sync::mpsc::channel::<RequestMessageEnvelope>(METRICS_BUFFER_SIZE);
+    tokio::spawn(async move {
+        loop {
+            METRICS_STORE
+                .tx_forward_failed
+                .swap(TX_FORWARD_FAILED_COUNT.get(), Ordering::Relaxed);
+            METRICS_STORE
+                .tx_forward_succeeded
+                .swap(TX_FORWARD_SUCCEEDED_COUNT.get(), Ordering::Relaxed);
+            METRICS_STORE
+                .tx_received
+                .swap(TX_RECEIVED_COUNT.get(), Ordering::Relaxed);
+            if let Err(err) = metrics_sender.send(METRICS_STORE.as_ref().into()).await {
+                error!("Failed to feed client metrics: {}", err);
+            }
+            sleep(Duration::from_secs(METRICS_SYNC_TIME_IN_S)).await;
+        }
+    });
+    metrics_receiver
+}
+
+fn collect_metrics() -> String {
+    let mut buffer = Vec::new();
+    let encoder = TextEncoder::new();
+
+    encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
+    String::from_utf8(buffer.clone()).unwrap()
+}
 
 #[derive(Default)]
 pub struct Metrics {
@@ -20,4 +84,19 @@ impl From<&Metrics> for pb::RequestMessageEnvelope {
             ..Default::default()
         }
     }
+}
+
+pub fn spawn_metrics(
+    metrics_addr: std::net::SocketAddr,
+) -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
+    tokio::spawn(async move {
+        let route_metrics = warp::path!("metrics")
+            .and(warp::path::end())
+            .and(warp::get())
+            .map(|| collect_metrics());
+        warp::serve(route_metrics).run(metrics_addr).await;
+        error!("Metrics server is not up.");
+        std::process::exit(1);
+    });
+    spawn_feeder()
 }
