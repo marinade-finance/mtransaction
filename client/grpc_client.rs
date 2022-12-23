@@ -1,7 +1,7 @@
 pub mod pb {
     tonic::include_proto!("validator");
 }
-use crate::metrics::Metrics;
+use crate::{metrics::Metrics, watcher::ValidatorStatus};
 use log::{error, info, warn};
 use pb::{
     m_transaction_client::MTransactionClient, Ping, Pong, RequestMessageEnvelope,
@@ -58,6 +58,7 @@ async fn mtx_stream(
     client: &mut MTransactionClient<Channel>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<Transaction>,
     metrics: Arc<Metrics>,
+    validator_watcher: Option<tokio::sync::oneshot::Receiver<ValidatorStatus>>,
 ) {
     let metrics_stream = async_stream::stream! {
         loop {
@@ -77,29 +78,59 @@ async fn mtx_stream(
 
     let response = client.tx_stream(request_stream).await.unwrap();
     let mut response_stream = response.into_inner();
-    loop {
-        tokio::select! {
-            metrics = metrics_stream.next() => {
-                if let Some(metrics) = metrics {
-                    info!("Sending metrics: {:?}", metrics);
-                    if let Err(err) = tx_upstream_transactions.send(metrics) {
-                        error!("Failed to enqueue metrics: {}", err);
-                    }
-                } else {
-                    error!("Stream of metrics dropped!");
-                    break
+    match validator_watcher {
+        Some(mut exit_signal) => loop {
+            tokio::select! {
+                _ = &mut exit_signal => {
+                    break;
                 }
-            }
 
-            response = response_stream.next() => {
-                if let Some(response) = response {
-                    process_upstream_message(response, tx_upstream_transactions.clone(), tx_transactions.clone());
-                } else {
-                    error!("Upstream closed!");
-                    break
+                metrics = metrics_stream.next() => {
+                    if let Some(metrics) = metrics {
+                        info!("Sending metrics: {:?}", metrics);
+                        if let Err(err) = tx_upstream_transactions.send(metrics) {
+                            error!("Failed to enqueue metrics: {}", err);
+                        }
+                    } else {
+                        error!("Stream of metrics dropped!");
+                        break
+                    }
+                }
+
+                response = response_stream.next() => {
+                    if let Some(response) = response {
+                        process_upstream_message(response, tx_upstream_transactions.clone(), tx_transactions.clone());
+                    } else {
+                        error!("Upstream closed!");
+                        break
+                    }
                 }
             }
-        }
+        },
+        None => loop {
+            tokio::select! {
+                metrics = metrics_stream.next() => {
+                    if let Some(metrics) = metrics {
+                        info!("Sending metrics: {:?}", metrics);
+                        if let Err(err) = tx_upstream_transactions.send(metrics) {
+                            error!("Failed to enqueue metrics: {}", err);
+                        }
+                    } else {
+                        error!("Stream of metrics dropped!");
+                        break
+                    }
+                }
+
+                response = response_stream.next() => {
+                    if let Some(response) = response {
+                        process_upstream_message(response, tx_upstream_transactions.clone(), tx_transactions.clone());
+                    } else {
+                        error!("Upstream closed!");
+                        break
+                    }
+                }
+            }
+        },
     }
 }
 
@@ -141,6 +172,7 @@ pub async fn spawn_grpc_client(
     tls_grpc_client_cert: Option<String>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<Transaction>,
     metrics: Arc<Metrics>,
+    exit_signal: Option<tokio::sync::oneshot::Receiver<ValidatorStatus>>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;
@@ -155,7 +187,13 @@ pub async fn spawn_grpc_client(
 
     info!("Streaming from gRPC server.");
     let mut client = MTransactionClient::new(channel.clone());
-    mtx_stream(&mut client, tx_transactions.clone(), metrics.clone()).await;
+    mtx_stream(
+        &mut client,
+        tx_transactions.clone(),
+        metrics.clone(),
+        exit_signal,
+    )
+    .await;
 
     Ok(())
 }

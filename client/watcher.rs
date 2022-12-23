@@ -4,27 +4,42 @@ use tokio::{
     sync::oneshot::{channel, Receiver},
     time::{sleep, Duration},
 };
-pub const RETRY_TIME_IN_SECONDS: u64 = 20;
+const RETRY_COUNT: u64 = 3;
+const RETRY_TIME_IN_SECONDS: u64 = 20;
 
 pub enum ValidatorStatus {
     Offline,
     Online,
 }
 
-pub fn connected() -> bool {
-    if let Ok(ValidatorStatus::Online) = check_validator() {
-        return true;
-    }
-    false
-}
+pub async fn check_validator() -> Result<ValidatorStatus, ()> {
+    tokio::spawn(async move {
+        let mut retry_count = RETRY_COUNT;
+        loop {
+            let sys = System::new_all();
+            let process = sys.processes_by_name("solana-valid").next();
+            match process {
+                None => {
+                    if retry_count == 0 {
+                        return Ok(ValidatorStatus::Offline);
+                    }
+                    retry_count = retry_count.saturating_sub(1);
+                    warn!(
+                        "Validator service is unreachable. Retrying in {:?} seconds",
+                        RETRY_TIME_IN_SECONDS
+                    );
+                    sleep(Duration::from_secs(RETRY_TIME_IN_SECONDS)).await;
 
-pub fn check_validator() -> Result<ValidatorStatus, ()> {
-    let sys = System::new_all();
-    if let None = sys.processes_by_name("solana-valid").next() {
-        return Ok(ValidatorStatus::Offline);
-    } else {
-        return Ok(ValidatorStatus::Online);
-    };
+                    continue;
+                }
+                Some(_) => {
+                    return Ok(ValidatorStatus::Online);
+                }
+            }
+        }
+    })
+    .await
+    .unwrap()
 }
 
 pub fn spawn_watcher() -> Receiver<ValidatorStatus> {
@@ -32,12 +47,11 @@ pub fn spawn_watcher() -> Receiver<ValidatorStatus> {
 
     tokio::spawn(async move {
         loop {
-            match check_validator() {
+            match check_validator().await {
                 Ok(ValidatorStatus::Online) => {
                     info!("Validator status: Online");
                 }
                 Ok(ValidatorStatus::Offline) => {
-                    warn!("Validator status: Offline");
                     if let Err(_) = status_tx.send(ValidatorStatus::Offline) {
                         info!("Validator watcher receiver dropped.");
                     }

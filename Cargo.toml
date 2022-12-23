@@ -12,7 +12,6 @@ name = "mtx-client"
 path = "client/main.rs"
 
 [dependencies]
-tokio-retry = "0.3"
 openssl = { version = "0.10" }
 jwt = { version = "0.16.0", features = ["openssl"]}
 async-stream = "0.3"

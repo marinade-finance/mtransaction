@@ -8,14 +8,12 @@ pub mod watcher;
 use crate::forwarder::spawn_forwarder;
 use crate::grpc_client::spawn_grpc_client;
 use crate::metrics::Metrics;
-use crate::watcher::{connected, spawn_watcher, RETRY_TIME_IN_SECONDS};
+use crate::watcher::{check_validator, spawn_watcher};
 use env_logger::Env;
-use log::info;
+use log::{error, info};
 use solana_sdk::signature::read_keypair_file;
 use std::sync::Arc;
 use structopt::StructOpt;
-use tokio::time::sleep;
-use tokio_retry::strategy::FixedInterval;
 
 pub const VERSION: &str = "rust-0.0.0-alpha";
 
@@ -41,6 +39,9 @@ struct Params {
 
     #[structopt(long = "rpc-url")]
     rpc_url: Option<String>,
+
+    #[structopt(long = "monitor-validator")]
+    monitor_validator: bool,
 
     #[structopt(long = "blackhole")]
     blackhole: bool,
@@ -73,46 +74,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params.throttle_parallel,
     );
 
-    match params.rpc_url {
-        None => {
-            spawn_grpc_client(
-                params.grpc_url.parse().unwrap(),
-                params.tls_grpc_ca_cert,
-                params.tls_grpc_client_key,
-                params.tls_grpc_client_cert,
-                tx_transactions,
-                metrics.clone(),
-            )
-            .await?;
-        }
-        Some(_) => {
-            let mut delays = FixedInterval::from_millis(RETRY_TIME_IN_SECONDS * 1000).take(3);
-            loop {
-                let mut watcher = spawn_watcher();
-                tokio::select! {
-                    _ = &mut watcher => {
-                        match delays.next() {
-                            Some(duration) => {
-                                sleep(duration).await;
-                            }
-                            None => break,
-                        }
-                    }
-
-                    _ = spawn_grpc_client(
-                        params.grpc_url.parse().unwrap(),
-                        params.tls_grpc_ca_cert.clone(),
-                        params.tls_grpc_client_key.clone(),
-                        params.tls_grpc_client_cert.clone(),
-                        tx_transactions.clone(),
-                        metrics.clone(),
-                    ), if connected() => {
-                        info!("Grpc client stopped.");
-                        break;
-                    }
-                }
+    if params.monitor_validator {
+        match check_validator().await {
+            Ok(watcher::ValidatorStatus::Online) => {
+                let exit_signal = spawn_watcher();
+                spawn_grpc_client(
+                    params.grpc_url.parse().unwrap(),
+                    params.tls_grpc_ca_cert,
+                    params.tls_grpc_client_key,
+                    params.tls_grpc_client_cert,
+                    tx_transactions,
+                    metrics.clone(),
+                    Some(exit_signal),
+                )
+                .await?;
+            }
+            Ok(watcher::ValidatorStatus::Offline) | Err(_) => {
+                error!("Validator status: Offline");
             }
         }
+    } else {
+        spawn_grpc_client(
+            params.grpc_url.parse().unwrap(),
+            params.tls_grpc_ca_cert,
+            params.tls_grpc_client_key,
+            params.tls_grpc_client_cert,
+            tx_transactions,
+            metrics.clone(),
+            None,
+        )
+        .await?;
     }
 
     info!("Service stopped.");
