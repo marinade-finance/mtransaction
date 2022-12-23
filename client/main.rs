@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tx_transactions = spawn_forwarder(
         identity,
         tpu_addr,
-        params.rpc_url.clone(),
+        params.rpc_url,
         metrics.clone(),
         params.blackhole,
         params.throttle_parallel,
