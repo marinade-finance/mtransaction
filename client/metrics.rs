@@ -2,10 +2,7 @@ use crate::grpc_client::pb::{self, RequestMessageEnvelope};
 use lazy_static::lazy_static;
 use log::error;
 use prometheus::{register_int_counter, Encoder, IntCounter, TextEncoder};
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
+use std::time::Duration;
 use tokio::time::sleep;
 
 use warp::Filter;
@@ -30,6 +27,7 @@ lazy_static! {
     )
     .unwrap();
 }
+
 fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
     let (metrics_sender, metrics_receiver) =
         tokio::sync::mpsc::channel::<RequestMessageEnvelope>(METRICS_BUFFER_SIZE);
@@ -61,27 +59,6 @@ fn collect_metrics() -> String {
 
     encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
     String::from_utf8(buffer.clone()).unwrap()
-}
-
-#[derive(Default)]
-pub struct Metrics {
-    pub tx_received: AtomicU64,
-    pub tx_forward_succeeded: AtomicU64,
-    pub tx_forward_failed: AtomicU64,
-}
-
-impl From<&Metrics> for pb::RequestMessageEnvelope {
-    fn from(metrics: &Metrics) -> Self {
-        pb::RequestMessageEnvelope {
-            metrics: Some(pb::Metrics {
-                tx_received: metrics.tx_received.load(Ordering::Relaxed),
-                tx_forward_succeeded: metrics.tx_forward_succeeded.load(Ordering::Relaxed),
-                tx_forward_failed: metrics.tx_forward_failed.load(Ordering::Relaxed),
-                version: crate::VERSION.to_string(),
-            }),
-            ..Default::default()
-        }
-    }
 }
 
 pub fn spawn_metrics(
