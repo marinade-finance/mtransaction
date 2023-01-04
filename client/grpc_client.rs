@@ -1,17 +1,12 @@
 pub mod pb {
     tonic::include_proto!("validator");
 }
-use crate::metrics::Metrics;
 use log::{error, info, warn};
 use pb::{
     m_transaction_client::MTransactionClient, Ping, Pong, RequestMessageEnvelope,
     ResponseMessageEnvelope, Transaction,
 };
-use std::sync::Arc;
-use tokio::{
-    sync::mpsc::UnboundedSender,
-    time::{sleep, Duration},
-};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::StreamExt;
 use tonic::{
     transport::{Certificate, Channel, ClientTlsConfig, Identity, Uri},
@@ -57,16 +52,8 @@ fn process_upstream_message(
 async fn mtx_stream(
     client: &mut MTransactionClient<Channel>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<Transaction>,
-    metrics: Arc<Metrics>,
+    mut metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
 ) {
-    let metrics_stream = async_stream::stream! {
-        loop {
-            yield metrics.as_ref().into();
-            sleep(Duration::from_secs(10)).await;
-        }
-    };
-    futures::pin_mut!(metrics_stream);
-
     let (tx_upstream_transactions, mut rx_upstream_transactions) =
         tokio::sync::mpsc::unbounded_channel::<RequestMessageEnvelope>();
     let request_stream = async_stream::stream! {
@@ -80,7 +67,7 @@ async fn mtx_stream(
 
     loop {
         tokio::select! {
-            metrics = metrics_stream.next() => {
+            metrics = metrics.recv() => {
                 if let Some(metrics) = metrics {
                     info!("Sending metrics: {:?}", metrics);
                     if let Err(err) = tx_upstream_transactions.send(metrics) {
@@ -141,7 +128,7 @@ pub async fn spawn_grpc_client(
     tls_grpc_client_key: Option<String>,
     tls_grpc_client_cert: Option<String>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<Transaction>,
-    metrics: Arc<Metrics>,
+    metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;

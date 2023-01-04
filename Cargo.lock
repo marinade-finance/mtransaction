@@ -1939,6 +1939,7 @@ dependencies = [
  "jsonrpc-derive",
  "jsonrpc-http-server",
  "jwt",
+ "lazy_static",
  "log",
  "openssl",
  "prometheus",

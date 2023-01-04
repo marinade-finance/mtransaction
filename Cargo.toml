@@ -12,6 +12,7 @@ name = "mtx-client"
 path = "client/main.rs"
 
 [dependencies]
+lazy_static = "1.4.0"
 openssl = { version = "0.10" }
 jwt = { version = "0.16.0", features = ["openssl"]}
 async-stream = "0.3"

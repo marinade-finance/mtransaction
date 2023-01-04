@@ -1,6 +1,6 @@
 use crate::forwarder::Forwarder;
 use crate::grpc_client::pb::Transaction;
-use crate::metrics::Metrics;
+use crate::metrics::{self};
 use log::{error, info};
 use serde_json::json;
 use solana_client::{
@@ -11,20 +11,18 @@ use solana_client::{
 };
 use solana_sdk::commitment_config::CommitmentLevel;
 use solana_transaction_status::UiTransactionEncoding;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 pub struct RpcForwarder {
-    metrics: Arc<Metrics>,
     throttle_parallel: Arc<Semaphore>,
     rpc_client: Arc<RpcClient>,
 }
 
 impl RpcForwarder {
-    pub fn new(rpc_url: String, metrics: Arc<Metrics>, throttle_parallel: usize) -> Self {
+    pub fn new(rpc_url: String, throttle_parallel: usize) -> Self {
         Self {
             rpc_client: Arc::new(RpcClient::new(rpc_url)),
-            metrics,
             throttle_parallel: Arc::new(Semaphore::new(throttle_parallel)),
         }
     }
@@ -32,10 +30,9 @@ impl RpcForwarder {
 
 impl Forwarder for RpcForwarder {
     fn process(&self, transaction: Transaction) {
-        self.metrics.tx_received.fetch_add(1, Ordering::Relaxed);
+        metrics::TX_RECEIVED_COUNT.inc();
         let rpc_client = self.rpc_client.clone();
         let throttle_parallel = self.throttle_parallel.clone();
-        let metrics = self.metrics.clone();
         tokio::spawn(async move {
             let throttle_permit = throttle_parallel.acquire_owned().await.unwrap();
 
@@ -55,7 +52,7 @@ impl Forwarder for RpcForwarder {
                 .await
             {
                 Ok(_) => {
-                    metrics.tx_forward_succeeded.fetch_add(1, Ordering::Relaxed);
+                    metrics::TX_FORWARD_SUCCEEDED_COUNT.inc();
                 }
                 Err(err) => {
                     if let ClientErrorKind::RpcError(RpcError::RpcResponseError {
@@ -71,7 +68,7 @@ impl Forwarder for RpcForwarder {
                     } else {
                         error!("Failed to send the transaction: {}", err);
                     }
-                    metrics.tx_forward_failed.fetch_add(1, Ordering::Relaxed);
+                    metrics::TX_FORWARD_FAILED_COUNT.inc();
                 }
             };
             drop(throttle_permit);
