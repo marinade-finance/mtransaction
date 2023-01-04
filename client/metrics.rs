@@ -3,10 +3,7 @@ use lazy_static::lazy_static;
 use log::error;
 use prometheus::{register_int_counter, Encoder, IntCounter, TextEncoder};
 use std::{
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 use tokio::time::sleep;
@@ -17,7 +14,6 @@ const METRICS_SYNC_TIME_IN_S: u64 = 10;
 const METRICS_BUFFER_SIZE: usize = 1;
 
 lazy_static! {
-    pub static ref METRICS_STORE: Arc<Metrics> = Arc::new(Metrics::default());
     pub static ref TX_RECEIVED_COUNT: IntCounter = register_int_counter!(
         "tx_received",
         "How many transactions were received by the client"
@@ -39,16 +35,18 @@ fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
         tokio::sync::mpsc::channel::<RequestMessageEnvelope>(METRICS_BUFFER_SIZE);
     tokio::spawn(async move {
         loop {
-            METRICS_STORE
-                .tx_forward_failed
-                .swap(TX_FORWARD_FAILED_COUNT.get(), Ordering::Relaxed);
-            METRICS_STORE
-                .tx_forward_succeeded
-                .swap(TX_FORWARD_SUCCEEDED_COUNT.get(), Ordering::Relaxed);
-            METRICS_STORE
-                .tx_received
-                .swap(TX_RECEIVED_COUNT.get(), Ordering::Relaxed);
-            if let Err(err) = metrics_sender.send(METRICS_STORE.as_ref().into()).await {
+            if let Err(err) = metrics_sender
+                .send(pb::RequestMessageEnvelope {
+                    metrics: Some(pb::Metrics {
+                        tx_received: TX_RECEIVED_COUNT.get(),
+                        tx_forward_succeeded: TX_FORWARD_SUCCEEDED_COUNT.get(),
+                        tx_forward_failed: TX_FORWARD_FAILED_COUNT.get(),
+                        version: crate::VERSION.to_string(),
+                    }),
+                    ..Default::default()
+                })
+                .await
+            {
                 error!("Failed to feed client metrics: {}", err);
             }
             sleep(Duration::from_secs(METRICS_SYNC_TIME_IN_S)).await;
