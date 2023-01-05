@@ -158,7 +158,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                                         if let Some(pong) = request_message_envelope.pong {
                                             if last_ping.id.to_string() == pong.id {
                                                 if let Err(err) = tx_metrics.send(vec![
-                                                    Metric::ClientLatency{ identity: identity.clone(), latency: last_ping.at.elapsed().as_micros() as f64 / 1.0e6 / 2.0}
+                                                    Metric::ClientLatency{ identity: identity.clone(), latency: last_ping.at.elapsed().as_micros() as f64 / 1.0e6 }
                                                     ]) {
                                                     error!("Failed to update client metrics: {}", err);
                                                 }
@@ -204,10 +204,16 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                     };
                 }
                 balancer.write().await.unsubscribe(&identity, &token);
-                if let Err(err) = tx_metrics.send(vec![Metric::ClientLatency {
-                    identity: identity.clone(),
-                    latency: metrics::LATENCY_NOT_AVAILABLE,
-                }]) {
+                if let Err(err) = tx_metrics.send(vec![
+                    Metric::ClientLatency {
+                        identity: identity.clone(),
+                        latency: metrics::NOT_AVAILABLE,
+                    },
+                    Metric::ServerTotalConnectedStake {
+                        identity: identity.clone(),
+                        stake: metrics::NOT_AVAILABLE,
+                    },
+                ]) {
                     error!("Failed to reset disconnected client latency: {}", err);
                 }
                 info!("Cleaning resources after client {} ({})", &identity, &token);

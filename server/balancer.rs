@@ -113,19 +113,23 @@ impl Balancer {
     }
 
     pub fn recalc_total_connected_stake(&mut self) {
-        self.total_connected_stake = self
+        let consumer_stakes = self
             .tx_consumers
             .iter()
-            .map(|(_, consumer)| consumer.stake)
-            .sum();
-        if let Err(err) = self
-            .tx_metrics
-            .send(vec![Metric::ServerTotalConnectedStake {
-                stake: self.total_connected_stake,
-            }])
-        {
-            error!("Failed to update total stake metrics: {}", err);
+            .map(|(_, consumer)| (&consumer.identity, consumer.stake));
+
+        for (identity, stake) in consumer_stakes.clone() {
+            if let Err(err) = self
+                .tx_metrics
+                .send(vec![Metric::ServerTotalConnectedStake {
+                    identity: identity.clone(),
+                    stake: stake as f64,
+                }])
+            {
+                error!("Failed to update total stake metrics: {}", err);
+            }
         }
+        self.total_connected_stake = consumer_stakes.map(|(_, stake)| stake).sum();
     }
 
     pub async fn publish(

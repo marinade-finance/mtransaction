@@ -10,7 +10,7 @@ use tokio::sync::{
 };
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
-pub const LATENCY_NOT_AVAILABLE: f64 = -1.0;
+pub const NOT_AVAILABLE: f64 = -1.0;
 pub struct MetricsStore {
     client_tx_received: IntGaugeVec,
     client_tx_forward_succeeded: IntGaugeVec,
@@ -20,7 +20,7 @@ pub struct MetricsStore {
     chain_tx_timeout: IntCounter,
     server_rpc_tx_accepted: IntCounter,
     server_rpc_tx_bytes_in: IntCounter,
-    server_total_connected_stake: IntCounter,
+    server_total_connected_stake: IntGaugeVec,
     tx_slots: RwLock<HashMap<u64, usize>>,
 }
 
@@ -72,9 +72,10 @@ impl MetricsStore {
                 "How many bytes were ingested by the RPC server"
             )
             .unwrap(),
-            server_total_connected_stake: register_int_counter!(
+            server_total_connected_stake: register_int_gauge_vec!(
                 "mtx_server_total_connected_stake",
-                "Total amount of stake connected to MTX server"
+                "Total amount of stake connected to MTX server",
+                &["identity"]
             )
             .unwrap(),
             tx_slots: Default::default(),
@@ -96,8 +97,10 @@ impl MetricsStore {
                 .with_label_values(&[&identity])
                 .set(count as i64),
             Metric::ClientLatency { identity, latency } => {
-                if latency == LATENCY_NOT_AVAILABLE {
-                    self.reset_client_latency(identity);
+                if latency == NOT_AVAILABLE {
+                    self.client_latency
+                        .remove_label_values(&[&identity])
+                        .expect("Couldn't remove latency metric");
                 } else {
                     self.client_latency
                         .with_label_values(&[&identity])
@@ -109,17 +112,18 @@ impl MetricsStore {
             Metric::ChainTxSlot { slot } => self.tx_slot_inc(slot).await,
             Metric::ServerRpcTxAccepted => self.server_rpc_tx_accepted.inc(),
             Metric::ServerRpcTxBytesIn { bytes } => self.server_rpc_tx_bytes_in.inc_by(bytes),
-            Metric::ServerTotalConnectedStake { stake } => {
-                self.server_total_connected_stake.reset();
-                self.server_total_connected_stake.inc_by(stake);
+            Metric::ServerTotalConnectedStake { identity, stake } => {
+                if stake == NOT_AVAILABLE {
+                    self.server_total_connected_stake
+                        .remove_label_values(&[&identity])
+                        .expect("Couldn't remove stake metric");
+                } else {
+                    self.server_total_connected_stake
+                        .with_label_values(&[&identity])
+                        .set(stake as i64);
+                }
             }
         }
-    }
-
-    pub fn reset_client_latency(&self, identity: String) {
-        self.client_latency
-            .remove_label_values(&[&identity])
-            .expect("Couldn't remove latency metric");
     }
 
     async fn tx_slot_inc(&self, slot: u64) {
@@ -158,7 +162,7 @@ pub enum Metric {
     ChainTxSlot { slot: u64 },
     ServerRpcTxAccepted,
     ServerRpcTxBytesIn { bytes: u64 },
-    ServerTotalConnectedStake { stake: u64 },
+    ServerTotalConnectedStake { identity: String, stake: f64 },
 }
 
 pub fn spawn(metrics_addr: std::net::SocketAddr) -> UnboundedSender<Vec<Metric>> {
