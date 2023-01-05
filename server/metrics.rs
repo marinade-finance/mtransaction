@@ -10,6 +10,7 @@ use tokio::sync::{
 };
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
+pub const LATENCY_NOT_AVAILABLE: f64 = -1.0;
 pub struct MetricsStore {
     client_tx_received: IntGaugeVec,
     client_tx_forward_succeeded: IntGaugeVec,
@@ -89,12 +90,12 @@ impl MetricsStore {
                 .with_label_values(&[&identity])
                 .set(count as i64),
             Metric::ClientLatency { identity, latency } => {
-                if latency >= 0.0 {
+                if latency == LATENCY_NOT_AVAILABLE {
+                    self.reset_client_latency(identity);
+                } else {
                     self.client_latency
                         .with_label_values(&[&identity])
                         .observe(latency);
-                } else {
-                    self.reset_client_latency(identity);
                 }
             }
             Metric::ChainTxFinalized => self.chain_tx_finalized.inc(),

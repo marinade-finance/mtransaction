@@ -1,8 +1,8 @@
 pub mod pb {
     tonic::include_proto!("validator");
 }
-use crate::balancer::*;
 use crate::metrics::Metric;
+use crate::{balancer::*, metrics};
 use futures::Stream;
 use jsonrpc_http_server::*;
 use log::{error, info, warn};
@@ -206,7 +206,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                 balancer.write().await.unsubscribe(&identity, &token);
                 if let Err(err) = tx_metrics.send(vec![Metric::ClientLatency {
                     identity: identity.clone(),
-                    latency: -1.0,
+                    latency: metrics::LATENCY_NOT_AVAILABLE,
                 }]) {
                     error!("Failed to reset disconnected client latency: {}", err);
                 }
