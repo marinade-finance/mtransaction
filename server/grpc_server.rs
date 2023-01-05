@@ -204,6 +204,12 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                     };
                 }
                 balancer.write().await.unsubscribe(&identity, &token);
+                if let Err(err) = tx_metrics.send(vec![Metric::ClientLatency {
+                    identity: identity.clone(),
+                    latency: -1.0,
+                }]) {
+                    error!("Failed to reset disconnected client latency: {}", err);
+                }
                 info!("Cleaning resources after client {} ({})", &identity, &token);
             });
         }
