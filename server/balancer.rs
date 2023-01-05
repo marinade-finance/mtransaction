@@ -1,4 +1,5 @@
 use crate::grpc_server::{self, build_tx_message_envelope};
+use crate::metrics::Metric;
 use crate::solana_service::{get_tpu_by_identity, leaders_stream};
 use jsonrpc_http_server::*;
 use log::{error, info};
@@ -6,6 +7,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
 use std::{collections::HashMap, sync::Arc};
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tonic::Status;
@@ -36,15 +38,17 @@ pub struct Balancer {
     pub stake_weights: HashMap<String, u64>,
     pub total_connected_stake: u64,
     pub leader_tpus: Vec<String>,
+    tx_metrics: UnboundedSender<Vec<Metric>>,
 }
 
 impl Balancer {
-    pub fn new() -> Self {
+    pub fn new(tx_metrics: UnboundedSender<Vec<Metric>>) -> Self {
         Self {
             tx_consumers: Default::default(),
             stake_weights: Default::default(),
             total_connected_stake: 0,
             leader_tpus: Default::default(),
+            tx_metrics: tx_metrics,
         }
     }
 
@@ -114,6 +118,14 @@ impl Balancer {
             .iter()
             .map(|(_, consumer)| consumer.stake)
             .sum();
+        if let Err(err) = self
+            .tx_metrics
+            .send(vec![Metric::ServerTotalConnectedStake {
+                stake: self.total_connected_stake,
+            }])
+        {
+            error!("Failed to update total stake metrics: {}", err);
+        }
     }
 
     pub async fn publish(
