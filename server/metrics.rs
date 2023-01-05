@@ -10,6 +10,7 @@ use tokio::sync::{
 };
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
+pub const LATENCY_NOT_AVAILABLE: f64 = -1.0;
 pub struct MetricsStore {
     client_tx_received: IntGaugeVec,
     client_tx_forward_succeeded: IntGaugeVec,
@@ -94,10 +95,15 @@ impl MetricsStore {
                 .client_tx_forward_failed
                 .with_label_values(&[&identity])
                 .set(count as i64),
-            Metric::ClientLatency { identity, latency } => self
-                .client_latency
-                .with_label_values(&[&identity])
-                .observe(latency),
+            Metric::ClientLatency { identity, latency } => {
+                if latency == LATENCY_NOT_AVAILABLE {
+                    self.reset_client_latency(identity);
+                } else {
+                    self.client_latency
+                        .with_label_values(&[&identity])
+                        .observe(latency);
+                }
+            }
             Metric::ChainTxFinalized => self.chain_tx_finalized.inc(),
             Metric::ChainTxTimeout => self.chain_tx_timeout.inc(),
             Metric::ChainTxSlot { slot } => self.tx_slot_inc(slot).await,
@@ -108,6 +114,12 @@ impl MetricsStore {
                 self.server_total_connected_stake.inc_by(stake);
             }
         }
+    }
+
+    pub fn reset_client_latency(&self, identity: String) {
+        self.client_latency
+            .remove_label_values(&[&identity])
+            .expect("Couldn't remove latency metric");
     }
 
     async fn tx_slot_inc(&self, slot: u64) {
