@@ -158,7 +158,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                                         if let Some(pong) = request_message_envelope.pong {
                                             if last_ping.id.to_string() == pong.id {
                                                 if let Err(err) = tx_metrics.send(vec![
-                                                    Metric::ClientLatency{ identity: identity.clone(), latency: last_ping.at.elapsed().as_micros() as f64 / 1.0e6 }
+                                                    Metric::ClientLatency { identity: identity.clone(), latency: last_ping.at.elapsed().as_micros() as f64 / 1.0e6 }
                                                     ]) {
                                                     error!("Failed to update client metrics: {}", err);
                                                 }
