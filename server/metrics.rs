@@ -1,4 +1,4 @@
-use log::info;
+use log::{info, warn};
 use prometheus::{
     register_histogram_vec, register_int_counter, register_int_gauge_vec, Encoder, HistogramVec,
     IntCounter, IntGaugeVec, TextEncoder,
@@ -98,9 +98,12 @@ impl MetricsStore {
                 .set(count as i64),
             Metric::ClientLatency { identity, latency } => {
                 if latency == NOT_AVAILABLE {
-                    self.client_latency
-                        .remove_label_values(&[&identity])
-                        .expect("Couldn't remove latency metric");
+                    if let Err(err) = self.client_latency.remove_label_values(&[&identity]) {
+                        warn!(
+                            "Couldn't discard latency metrics for {}. Error: {:?}",
+                            identity, err
+                        );
+                    }
                 } else {
                     self.client_latency
                         .with_label_values(&[&identity])
@@ -114,9 +117,15 @@ impl MetricsStore {
             Metric::ServerRpcTxBytesIn { bytes } => self.server_rpc_tx_bytes_in.inc_by(bytes),
             Metric::ServerTotalConnectedStake { identity, stake } => {
                 if stake == NOT_AVAILABLE {
-                    self.server_total_connected_stake
+                    if let Err(err) = self
+                        .server_total_connected_stake
                         .remove_label_values(&[&identity])
-                        .expect("Couldn't remove stake metric");
+                    {
+                        warn!(
+                            "Couldn't discard connected stake metrics for {}. Error: {:?}",
+                            identity, err
+                        );
+                    }
                 } else {
                     self.server_total_connected_stake
                         .with_label_values(&[&identity])
