@@ -1,4 +1,5 @@
 use crate::grpc_server::{self, build_tx_message_envelope};
+use crate::metrics;
 use crate::solana_service::{get_tpu_by_identity, leaders_stream};
 use jsonrpc_http_server::*;
 use log::{error, info};
@@ -132,6 +133,11 @@ impl Balancer {
     }
 
     pub fn recalc_total_connected_stake(&mut self) {
+        for tx_consumer in self.tx_consumers.values() {
+            metrics::SERVER_TOTAL_CONNECTED_STAKE
+                .with_label_values(&[&tx_consumer.identity])
+                .set(tx_consumer.stake as i64);
+        }
         self.total_connected_stake = self
             .tx_consumers
             .iter()

@@ -1,5 +1,5 @@
 use lazy_static::lazy_static;
-use log::info;
+use log::{info, warn};
 use prometheus::{
     register_histogram_vec, register_int_counter, register_int_gauge_vec, Encoder, HistogramVec,
     IntCounter, IntGaugeVec, TextEncoder,
@@ -63,12 +63,27 @@ lazy_static! {
         "How many bytes were ingested by the RPC server"
     )
     .unwrap();
+    pub static ref SERVER_TOTAL_CONNECTED_STAKE: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_server_total_connected_stake",
+        "Total amount of stake connected to MTX server",
+        &["identity"]
+    )
+    .unwrap();
 }
 
-pub fn reset_client_ping_rtt(identity: &String) {
-    CLIENT_PING_RTT
-        .remove_label_values(&[identity])
-        .expect("Couldn't remove latency metric");
+pub fn reset_client_metrics(identity: &String) {
+    if let Err(err) = CLIENT_PING_RTT.remove_label_values(&[identity]) {
+        warn!(
+            "Couldn't discard latency metrics for {}. Error: {:?}",
+            identity, err
+        );
+    }
+    if let Err(err) = SERVER_TOTAL_CONNECTED_STAKE.remove_label_values(&[identity]) {
+        warn!(
+            "Couldn't discard connected stake metrics for {}. Error: {:?}",
+            identity, err
+        );
+    }
 }
 
 pub fn spawn(metrics_addr: std::net::SocketAddr) {
