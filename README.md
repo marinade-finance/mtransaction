@@ -137,6 +137,9 @@ sudo apt install -y protobuf-compiler libprotobuf-dev
 
 # Alpine
 apk add protoc protobuf-dev
+
+# MacOS
+brew install protobuf
 ```
 
 Useful commands:

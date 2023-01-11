@@ -65,16 +65,17 @@ struct Params {
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let params = Params::from_args();
-    let tx_metrics = metrics::spawn(params.metrics_addr.parse().unwrap());
 
     let client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
-    let balancer = Arc::new(RwLock::new(Balancer::new(tx_metrics.clone())));
+    let balancer = Arc::new(RwLock::new(Balancer::new()));
 
     let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
 
     balancer_updater(balancer.clone(), client.clone(), pubsub_client.clone());
 
-    let tx_signatures = spawn_tx_signature_watcher(client.clone(), tx_metrics.clone()).unwrap();
+    metrics::spawn(params.metrics_addr.parse().unwrap());
+
+    let tx_signatures = spawn_tx_signature_watcher(client.clone()).unwrap();
 
     {
         let balancer = balancer.clone();
@@ -125,7 +126,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         params.rpc_addr.parse().unwrap(),
         params.jwt_public_key,
         balancer.clone(),
-        tx_metrics.clone(),
         tx_signatures,
     );
 
@@ -135,7 +135,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         params.tls_grpc_server_key,
         params.tls_grpc_ca_cert,
         balancer.clone(),
-        tx_metrics.clone(),
     )
     .await?;
 

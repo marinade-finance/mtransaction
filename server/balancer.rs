@@ -1,5 +1,5 @@
 use crate::grpc_server::{self, build_tx_message_envelope};
-use crate::metrics::Metric;
+use crate::metrics;
 use crate::solana_service::{get_tpu_by_identity, leaders_stream};
 use jsonrpc_http_server::*;
 use log::{error, info};
@@ -7,7 +7,6 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tonic::Status;
@@ -37,18 +36,18 @@ pub struct Balancer {
     pub tx_consumers: HashMap<String, TxConsumer>,
     pub stake_weights: HashMap<String, u64>,
     pub total_connected_stake: u64,
+    pub leaders: HashMap<String, String>,
     pub leader_tpus: Vec<String>,
-    tx_metrics: UnboundedSender<Vec<Metric>>,
 }
 
 impl Balancer {
-    pub fn new(tx_metrics: UnboundedSender<Vec<Metric>>) -> Self {
+    pub fn new() -> Self {
         Self {
             tx_consumers: Default::default(),
             stake_weights: Default::default(),
             total_connected_stake: 0,
+            leaders: Default::default(),
             leader_tpus: Default::default(),
-            tx_metrics: tx_metrics,
         }
     }
 
@@ -87,21 +86,42 @@ impl Balancer {
         }
     }
 
-    pub fn pick_tx_consumer(&self) -> Option<&TxConsumer> {
+    pub fn pick_random_tx_consumer_with_target(&self) -> Option<(&TxConsumer, Vec<String>)> {
         let mut rng: StdRng = SeedableRng::from_entropy();
         if self.total_connected_stake == 0 {
             return None;
         }
+
         let random_stake_point = rng.gen_range(0..self.total_connected_stake);
         let mut accumulated_sum = 0;
 
         for (_, tx_consumer) in self.tx_consumers.iter() {
             accumulated_sum += tx_consumer.stake;
             if random_stake_point < accumulated_sum {
-                return Some(tx_consumer);
+                return Some((tx_consumer, self.leader_tpus.clone()));
             }
         }
         return None;
+    }
+
+    pub fn pick_leader_tx_consumers_with_targets(&self) -> Vec<(&TxConsumer, Vec<String>)> {
+        self.tx_consumers
+            .iter()
+            .flat_map(|(identity, tx_consumer)| match self.leaders.get(identity) {
+                Some(tpu) => Some((tx_consumer, vec![tpu.clone()])),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn pick_tx_consumers(&self) -> Vec<(&TxConsumer, Vec<String>)> {
+        let mut consumers: Vec<_> = self.pick_leader_tx_consumers_with_targets();
+
+        if let Some(random_tx_consumer) = self.pick_random_tx_consumer_with_target() {
+            consumers.push(random_tx_consumer);
+        }
+
+        consumers
     }
 
     pub fn update_stake_weights(&mut self, stake_weights: HashMap<String, u64>) {
@@ -115,16 +135,10 @@ impl Balancer {
     pub fn recalc_total_connected_stake(&mut self) {
         let consumer_stakes = &self.tx_consumers;
 
-        if let Err(err) = self.tx_metrics.send(
-            consumer_stakes
-                .iter()
-                .map(|(_, consumer)| Metric::ServerTotalConnectedStake {
-                    identity: consumer.identity.clone(),
-                    stake: consumer.stake as f64,
-                })
-                .collect(),
-        ) {
-            error!("Failed to update total stake metrics: {}", err);
+        for tx_consumer in self.tx_consumers.values() {
+            metrics::SERVER_TOTAL_CONNECTED_STAKE
+                .with_label_values(&[&tx_consumer.identity])
+                .set(tx_consumer.stake as i64);
         }
         self.total_connected_stake = consumer_stakes
             .iter()
@@ -138,25 +152,32 @@ impl Balancer {
         data: String,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         info!("Forwarding tx {}...", &signature);
-        if let Some(tx_consumer) = self.pick_tx_consumer() {
+
+        let tx_consumers = self.pick_tx_consumers();
+
+        if tx_consumers.len() == 0 {
+            error!("Dropping tx, no available clients");
+            return Err("No available clients connected".into());
+        }
+
+        for (tx_consumer, tpus) in tx_consumers {
             let result = tx_consumer
                 .tx
                 .send(std::result::Result::<_, Status>::Ok(
-                    build_tx_message_envelope(signature, data, self.leader_tpus.clone()),
+                    build_tx_message_envelope(signature.clone(), data.clone(), tpus),
                 ))
                 .await;
             match result {
                 Ok(_) => info!("Successfully forwarded to {}", tx_consumer.identity),
                 Err(err) => error!("Client disconnected {} {}", tx_consumer.identity, err), // TODO unsubscribe
-            }
-            return Ok(());
+            };
         }
-        error!("Dropping tx, no non-delinquent listening clients");
-        Err("No non-delinquent clients with stake are connected".into())
+        Ok(())
     }
 
-    pub fn set_leader_tpus(&mut self, tpus: Vec<String>) {
-        self.leader_tpus = tpus;
+    pub fn set_leaders(&mut self, leaders: HashMap<String, String>) {
+        self.leader_tpus = leaders.values().cloned().collect();
+        self.leaders = leaders;
     }
 }
 
@@ -188,16 +209,16 @@ pub fn balancer_updater(
                         Err(err) => error!("Failed to update TPUs by identity: {}", err)
                     };
                 },
-                leaders = rx_leaders.next() => {
-                    if let Some(leaders) = leaders {
-                        let tpus = leaders
-                            .iter()
-                            .filter_map(|identity| tpu_by_identity.get(identity))
-                            .cloned()
-                            .collect();
-                        info!("New leaders {:?} {:?}", &leaders, &tpus);
-                        balancer.write().await.set_leader_tpus(tpus);
-                    }
+                Some(leaders) = rx_leaders.next() => {
+                    let leaders_with_tpus = leaders
+                        .iter()
+                        .filter_map(|identity| match tpu_by_identity.get(identity) {
+                            Some(tpu) => Some((identity.clone(), tpu.clone())),
+                            _=> None,
+                        })
+                        .collect();
+                    info!("New leaders {:?}", &leaders_with_tpus);
+                    balancer.write().await.set_leaders(leaders_with_tpus);
                 },
             }
         }
