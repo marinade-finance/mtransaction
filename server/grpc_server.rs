@@ -182,7 +182,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                         unsubscribed = (&mut rx_unsubscribe) => {
                             info!("Client unsubscribed {} ({}): {:?}", &identity, &token, unsubscribed);
                             break;
-                        },
+                        }
 
                         request_message_envelope = input_stream.next() => {
                             if let Some(request_message_envelope) = request_message_envelope{
