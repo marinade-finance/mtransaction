@@ -133,14 +133,13 @@ impl Balancer {
     }
 
     pub fn recalc_total_connected_stake(&mut self) {
-        let consumer_stakes = &self.tx_consumers;
-
         for tx_consumer in self.tx_consumers.values() {
             metrics::SERVER_TOTAL_CONNECTED_STAKE
                 .with_label_values(&[&tx_consumer.identity])
                 .set(tx_consumer.stake as i64);
         }
-        self.total_connected_stake = consumer_stakes
+        self.total_connected_stake = self
+            .tx_consumers
             .iter()
             .map(|(_, consumer)| consumer.stake)
             .sum();
