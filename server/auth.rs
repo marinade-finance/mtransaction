@@ -48,7 +48,6 @@ fn authorization_header_auth(
         digest: MessageDigest::sha256(),
         key: public_key,
     };
-    log::info!("Header: {}", header.clone());
     let mut header_parts = header.split_whitespace();
     if Some("Bearer").ne(&header_parts.next()) {
         return Err("Authorization header must start with 'Bearer '!".into());

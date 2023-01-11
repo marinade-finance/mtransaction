@@ -26,10 +26,10 @@ lazy_static! {
     )
     .unwrap();
     pub static ref CLIENT_PING_RTT: HistogramVec = register_histogram_vec!(
-        "mtx_CLIENT_PING_RTT",
+        "mtx_client_ping_rtt",
         "Latency to the client based on ping times",
         &["identity"],
-        vec![0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56]
+        vec![0.002, 0.004, 0.008, 0.016, 0.032, 0.064, 0.128]
     )
     .unwrap();
     pub static ref CHAIN_TX_FINALIZED: IntCounter = register_int_counter!(

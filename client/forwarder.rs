@@ -1,4 +1,5 @@
 use crate::grpc_client::pb::Transaction;
+use crate::metrics;
 use crate::quic_forwarder::QuicForwarder;
 use crate::rpc_forwarder::RpcForwarder;
 use enum_dispatch::enum_dispatch;
@@ -22,7 +23,9 @@ pub trait Forwarder {
 struct BlackholeForwarder {}
 impl Forwarder for BlackholeForwarder {
     fn process(&self, transaction: Transaction) {
-        info!("Tx {} -> blackhole", transaction.signature);
+        metrics::TX_RECEIVED_COUNT.inc();
+        metrics::TX_FORWARD_SUCCEEDED_COUNT.inc();
+        info!("Tx {} -> blackhole ({:?})", transaction.signature, transaction.tpu);
     }
 }
 
