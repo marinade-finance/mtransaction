@@ -4,9 +4,7 @@ use prometheus::{
     register_histogram_vec, register_int_counter, register_int_gauge_vec, Encoder, HistogramVec,
     IntCounter, IntGaugeVec, TextEncoder,
 };
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
-use warp::{http::StatusCode, Filter, Rejection, Reply};
+use warp::Filter;
 
 lazy_static! {
     pub static ref CLIENT_TX_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
@@ -67,21 +65,10 @@ lazy_static! {
     .unwrap();
 }
 
-pub struct MetricsStore {
-    tx_slots: RwLock<HashMap<u64, usize>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum Metric {
-    ClientTxReceived { identity: String, count: u64 },
-    ClientTxForwardSucceeded { identity: String, count: u64 },
-    ClientTxForwardFailed { identity: String, count: u64 },
-    ClientLatency { identity: String, latency: f64 },
-    ChainTxFinalized,
-    ChainTxTimeout,
-    ChainTxSlot { slot: u64 },
-    ServerRpcTxAccepted,
-    ServerRpcTxBytesIn { bytes: u64 },
+pub fn reset_client_ping_rtt(identity: &String) {
+    CLIENT_PING_RTT
+        .remove_label_values(&[identity])
+        .expect("Couldn't remove latency metric");
 }
 
 pub fn spawn(metrics_addr: std::net::SocketAddr) {
@@ -100,21 +87,4 @@ fn metrics_handler() -> String {
 
     encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
     String::from_utf8(buffer.clone()).unwrap()
-}
-
-pub async fn tx_slots_handler(
-    metrics_store: Arc<MetricsStore>,
-) -> std::result::Result<impl Reply, Rejection> {
-    info!("Slots info requested");
-
-    let tx_slots = metrics_store
-        .tx_slots
-        .read()
-        .await
-        .iter()
-        .map(|(slot, count)| std::iter::repeat(slot.to_string()).take(*count))
-        .flatten()
-        .fold(String::new(), |a, b| a + &b + "\n");
-
-    Ok(warp::reply::with_status(tx_slots, StatusCode::OK))
 }

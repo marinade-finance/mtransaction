@@ -201,6 +201,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                     };
                 }
                 balancer.write().await.unsubscribe(&identity, &token);
+                metrics::reset_client_ping_rtt(&identity);
                 info!("Cleaning resources after client {} ({})", &identity, &token);
             });
         }
