@@ -89,20 +89,36 @@ fn get_identity_from_req(req: &Request<Streaming<RequestMessageEnvelope>>) -> Op
     return None;
 }
 
-fn handle_client_metrics (identity: &String, token: &String, metrics: pb::Metrics) {
-    info!("Accepted metrics from {} ({}): {:?}", &identity, &token, metrics);
-    metrics::CLIENT_TX_RECEIVED.with_label_values(&[&identity]).set(metrics.tx_received as i64);
-    metrics::CLIENT_TX_FORWARD_SUCCEEDED.with_label_values(&[&identity]).set(metrics.tx_forward_succeeded as i64);
-    metrics::CLIENT_TX_FORWARD_FAILED.with_label_values(&[&identity]).set(metrics.tx_forward_failed as i64);
+fn handle_client_metrics(identity: &String, token: &String, metrics: pb::Metrics) {
+    info!(
+        "Accepted metrics from {} ({}): {:?}",
+        &identity, &token, metrics
+    );
+    metrics::CLIENT_TX_RECEIVED
+        .with_label_values(&[&identity])
+        .set(metrics.tx_received as i64);
+    metrics::CLIENT_TX_FORWARD_SUCCEEDED
+        .with_label_values(&[&identity])
+        .set(metrics.tx_forward_succeeded as i64);
+    metrics::CLIENT_TX_FORWARD_FAILED
+        .with_label_values(&[&identity])
+        .set(metrics.tx_forward_failed as i64);
 }
 
-fn handle_client_pong (identity: &String, pong: pb::Pong, last_ping: &Ping) {
+fn handle_client_pong(identity: &String, pong: pb::Pong, last_ping: &Ping) {
     if last_ping.id.to_string() == pong.id {
-        metrics::CLIENT_PING_RTT.with_label_values(&[identity]).observe(last_ping.at.elapsed().as_micros() as f64 / 1.0e6);
+        metrics::CLIENT_PING_RTT
+            .with_label_values(&[identity])
+            .observe(last_ping.at.elapsed().as_micros() as f64 / 1.0e6);
     }
 }
 
-fn handle_client_request (request_message_envelope: Result<RequestMessageEnvelope, Status>, identity: &String, token: &String, last_ping: &Ping) {
+fn handle_client_request(
+    request_message_envelope: Result<RequestMessageEnvelope, Status>,
+    identity: &String,
+    token: &String,
+    last_ping: &Ping,
+) {
     match request_message_envelope {
         Ok(request_message_envelope) => {
             if let Some(metrics) = request_message_envelope.metrics {
@@ -111,7 +127,7 @@ fn handle_client_request (request_message_envelope: Result<RequestMessageEnvelop
             if let Some(pong) = request_message_envelope.pong {
                 handle_client_pong(&identity, pong, last_ping);
             }
-        },
+        }
         Err(err) => error!(
             "Error receiving message from the client {} ({}): {}",
             &identity, &token, err
@@ -200,9 +216,10 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
                         }
                     };
                 }
+
+                info!("Cleaning resources after client {} ({})", &identity, &token);
                 balancer.write().await.unsubscribe(&identity, &token);
                 metrics::reset_client_ping_rtt(&identity);
-                info!("Cleaning resources after client {} ({})", &identity, &token);
             });
         }
 
