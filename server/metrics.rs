@@ -1,128 +1,74 @@
+use lazy_static::lazy_static;
 use log::info;
 use prometheus::{
     register_histogram_vec, register_int_counter, register_int_gauge_vec, Encoder, HistogramVec,
     IntCounter, IntGaugeVec, TextEncoder,
 };
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedSender},
-    RwLock,
-};
+use tokio::sync::RwLock;
 use warp::{http::StatusCode, Filter, Rejection, Reply};
 
-pub struct MetricsStore {
-    client_tx_received: IntGaugeVec,
-    client_tx_forward_succeeded: IntGaugeVec,
-    client_tx_forward_failed: IntGaugeVec,
-    client_latency: HistogramVec,
-    chain_tx_finalized: IntCounter,
-    chain_tx_timeout: IntCounter,
-    server_rpc_tx_accepted: IntCounter,
-    server_rpc_tx_bytes_in: IntCounter,
-    tx_slots: RwLock<HashMap<u64, usize>>,
+lazy_static! {
+    pub static ref CLIENT_TX_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_client_tx_received",
+        "How many transactions were received by the client",
+        &["identity"]
+    )
+    .unwrap();
+    pub static ref CLIENT_TX_FORWARD_SUCCEEDED: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_client_tx_forward_succeeded",
+        "How many transactions were successfully forwarded",
+        &["identity"]
+    )
+    .unwrap();
+    pub static ref CLIENT_TX_FORWARD_FAILED: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_client_tx_forward_failed",
+        "How many transactions failed on the client side",
+        &["identity"]
+    )
+    .unwrap();
+    pub static ref CLIENT_PING_RTT: HistogramVec = register_histogram_vec!(
+        "mtx_CLIENT_PING_RTT",
+        "Latency to the client based on ping times",
+        &["identity"],
+        vec![0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56]
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_FINALIZED: IntCounter = register_int_counter!(
+        "mtx_chain_tx_finalized",
+        "How many transactions were finalized on chain"
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_TIMEOUT: IntCounter = register_int_counter!(
+        "mtx_chain_tx_timeout",
+        "How many transactions we were unable to confirm as finalized"
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_EXECUTION_SUCCESS: IntCounter = register_int_counter!(
+        "mtx_chain_tx_execution_success",
+        "How many transactions ended on chain without errors"
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_EXECUTION_ERROR: IntCounter = register_int_counter!(
+        "mtx_chain_tx_execution_error",
+        "How many transactions ended on chain with errors"
+    )
+    .unwrap();
+    pub static ref SERVER_RPC_TX_ACCEPTED: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_server_rpc_tx_accepted",
+        "How many transactions were accepted by the server",
+        &["partner"]
+    )
+    .unwrap();
+    pub static ref SERVER_RPC_TX_BYTES_IN: IntCounter = register_int_counter!(
+        "mtx_server_rpc_tx_bytes_in",
+        "How many bytes were ingested by the RPC server"
+    )
+    .unwrap();
 }
 
-impl MetricsStore {
-    pub fn new() -> Self {
-        Self {
-            client_tx_received: register_int_gauge_vec!(
-                "mtx_client_tx_received",
-                "How many transactions were received by the client",
-                &["identity"]
-            )
-            .unwrap(),
-            client_tx_forward_succeeded: register_int_gauge_vec!(
-                "mtx_client_tx_forward_succeeded",
-                "How many transactions were successfully forwarded",
-                &["identity"]
-            )
-            .unwrap(),
-            client_tx_forward_failed: register_int_gauge_vec!(
-                "mtx_client_tx_forward_failed",
-                "How many transactions failed on the client side",
-                &["identity"]
-            )
-            .unwrap(),
-            client_latency: register_histogram_vec!(
-                "mtx_client_latency",
-                "Latency to the client based on ping times",
-                &["identity"],
-                vec![0.005, 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56]
-            )
-            .unwrap(),
-            chain_tx_finalized: register_int_counter!(
-                "mtx_chain_tx_finalized",
-                "How many transactions were finalized on chain"
-            )
-            .unwrap(),
-            chain_tx_timeout: register_int_counter!(
-                "mtx_chain_tx_timeout",
-                "How many transactions we were unable to confirm as finalized"
-            )
-            .unwrap(),
-            server_rpc_tx_accepted: register_int_counter!(
-                "mtx_server_rpc_tx_accepted",
-                "How many transactions were accepted by the server"
-            )
-            .unwrap(),
-            server_rpc_tx_bytes_in: register_int_counter!(
-                "mtx_server_rpc_tx_bytes_in",
-                "How many bytes were ingested by the RPC server"
-            )
-            .unwrap(),
-            tx_slots: Default::default(),
-        }
-    }
-
-    pub async fn process_metric(&self, metric: Metric) {
-        match metric {
-            Metric::ClientTxReceived { identity, count } => self
-                .client_tx_received
-                .with_label_values(&[&identity])
-                .set(count as i64),
-            Metric::ClientTxForwardSucceeded { identity, count } => self
-                .client_tx_forward_succeeded
-                .with_label_values(&[&identity])
-                .set(count as i64),
-            Metric::ClientTxForwardFailed { identity, count } => self
-                .client_tx_forward_failed
-                .with_label_values(&[&identity])
-                .set(count as i64),
-            Metric::ClientLatency { identity, latency } => self
-                .client_latency
-                .with_label_values(&[&identity])
-                .observe(latency),
-            Metric::ChainTxFinalized => self.chain_tx_finalized.inc(),
-            Metric::ChainTxTimeout => self.chain_tx_timeout.inc(),
-            Metric::ChainTxSlot { slot } => self.tx_slot_inc(slot).await,
-            Metric::ServerRpcTxAccepted => self.server_rpc_tx_accepted.inc(),
-            Metric::ServerRpcTxBytesIn { bytes } => self.server_rpc_tx_bytes_in.inc_by(bytes),
-        }
-    }
-
-    async fn tx_slot_inc(&self, slot: u64) {
-        self.tx_slots
-            .write()
-            .await
-            .entry(slot)
-            .and_modify(|count| *count += 1)
-            .or_insert(1);
-    }
-
-    pub async fn process_metrics(&self, metrics: Vec<Metric>) {
-        for metric in metrics {
-            self.process_metric(metric).await;
-        }
-    }
-
-    pub fn gather(&self) -> String {
-        let mut buffer = Vec::new();
-        let encoder = TextEncoder::new();
-        let metrics = prometheus::gather();
-        encoder.encode(&metrics, &mut buffer).unwrap();
-
-        String::from_utf8(buffer.clone()).unwrap()
-    }
+pub struct MetricsStore {
+    tx_slots: RwLock<HashMap<u64, usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,54 +84,22 @@ pub enum Metric {
     ServerRpcTxBytesIn { bytes: u64 },
 }
 
-pub fn spawn(metrics_addr: std::net::SocketAddr) -> UnboundedSender<Vec<Metric>> {
-    let (tx, mut rx) = unbounded_channel();
-    let metrics_store = Arc::new(MetricsStore::new());
-
-    {
-        let metrics_store = metrics_store.clone();
-        tokio::spawn(async move {
-            info!("Waiting for metrics");
-            while let Some(metrics) = rx.recv().await {
-                metrics_store.process_metrics(metrics).await;
-            }
-        });
-    }
-
-    {
-        tokio::spawn(async move {
-            let metrics_route = {
-                let metrics_store = metrics_store.clone();
-                warp::path!("metrics")
-                    .and(warp::get())
-                    .and(warp::any().map(move || metrics_store.clone()))
-                    .and_then(metrics_handler)
-            };
-            let tx_slots_route = {
-                let metrics_store = metrics_store.clone();
-                warp::path!("slots")
-                    .and(warp::get())
-                    .and(warp::any().map(move || metrics_store.clone()))
-                    .and_then(tx_slots_handler)
-            };
-            info!("Spawning metrics server");
-            warp::serve(metrics_route.or(tx_slots_route))
-                .run(metrics_addr)
-                .await;
-        });
-    }
-
-    tx
+pub fn spawn(metrics_addr: std::net::SocketAddr) {
+    tokio::spawn(async move {
+        let metrics_route = warp::path!("metrics")
+            .and(warp::get())
+            .map(|| metrics_handler());
+        info!("Spawning metrics server");
+        warp::serve(metrics_route).run(metrics_addr).await;
+    });
 }
 
-pub async fn metrics_handler(
-    metrics_store: Arc<MetricsStore>,
-) -> std::result::Result<impl Reply, Rejection> {
-    info!("Metrics requested");
-    Ok(warp::reply::with_status(
-        metrics_store.gather(),
-        StatusCode::OK,
-    ))
+fn metrics_handler() -> String {
+    let mut buffer = Vec::new();
+    let encoder = TextEncoder::new();
+
+    encoder.encode(&prometheus::gather(), &mut buffer).unwrap();
+    String::from_utf8(buffer.clone()).unwrap()
 }
 
 pub async fn tx_slots_handler(
