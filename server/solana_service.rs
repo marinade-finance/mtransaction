@@ -139,7 +139,7 @@ struct SignatureRecord {
     signature: Signature,
 }
 pub fn spawn_tx_signature_watcher(
-    client: Arc<RpcClient>
+    client: Arc<RpcClient>,
 ) -> Result<UnboundedSender<Signature>, Box<dyn Error + Send + Sync>> {
     let (tx_signature, rx_signature) = unbounded_channel::<Signature>();
 
@@ -194,10 +194,7 @@ pub fn spawn_tx_signature_watcher(
     Ok(tx_signature)
 }
 
-fn spawn_signature_checker(
-    client: Arc<RpcClient>,
-    bundle: Vec<Signature>,
-) {
+fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<Signature>) {
     tokio::spawn(async move {
         match client.get_signature_statuses(&bundle) {
             Ok(response) => {

@@ -25,7 +25,10 @@ impl Forwarder for BlackholeForwarder {
     fn process(&self, transaction: Transaction) {
         metrics::TX_RECEIVED_COUNT.inc();
         metrics::TX_FORWARD_SUCCEEDED_COUNT.inc();
-        info!("Tx {} -> blackhole ({:?})", transaction.signature, transaction.tpu);
+        info!(
+            "Tx {} -> blackhole ({:?})",
+            transaction.signature, transaction.tpu
+        );
     }
 }
 

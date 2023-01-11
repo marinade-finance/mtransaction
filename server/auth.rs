@@ -16,7 +16,7 @@ pub enum Auth {
 impl ToString for Auth {
     fn to_string(&self) -> String {
         match self {
-            Auth::JWT(jwt) => jwt.to_string()
+            Auth::JWT(jwt) => jwt.to_string(),
         }
     }
 }
@@ -31,12 +31,12 @@ pub struct JWT {
 impl ToString for JWT {
     fn to_string(&self) -> String {
         if let Some(partner) = &self.partner {
-            return format!("JWT:partner:{}", partner)
+            return format!("JWT:partner:{}", partner);
         }
         if let Some(pubkey) = &self.pubkey {
-            return format!("JWT:pubkey:{}", pubkey)
+            return format!("JWT:pubkey:{}", pubkey);
         }
-        return "JWT:Anonymous".to_string()
+        return "JWT:Anonymous".to_string();
     }
 }
 

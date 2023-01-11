@@ -67,7 +67,9 @@ impl Rpc for RpcServer {
         };
 
         info!("RPC method sendPriorityTransaction called: {:?}", auth);
-        metrics::SERVER_RPC_TX_ACCEPTED.with_label_values(&[&auth.to_string()]).inc();
+        metrics::SERVER_RPC_TX_ACCEPTED
+            .with_label_values(&[&auth.to_string()])
+            .inc();
         metrics::SERVER_RPC_TX_BYTES_IN.inc_by(data.len() as u64);
 
         let wire_transaction = base64::decode(&data).unwrap();
