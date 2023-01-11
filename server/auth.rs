@@ -13,12 +13,31 @@ pub enum Auth {
     JWT(JWT),
 }
 
+impl ToString for Auth {
+    fn to_string(&self) -> String {
+        match self {
+            Auth::JWT(jwt) => jwt.to_string()
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct JWT {
     pub iat: u64,
     pub exp: u64,
     pub pubkey: Option<String>,
     pub partner: Option<String>,
+}
+impl ToString for JWT {
+    fn to_string(&self) -> String {
+        if let Some(partner) = &self.partner {
+            return format!("JWT:partner:{}", partner)
+        }
+        if let Some(pubkey) = &self.pubkey {
+            return format!("JWT:pubkey:{}", pubkey)
+        }
+        return "JWT:Anonymous".to_string()
+    }
 }
 
 fn authorization_header_auth(
@@ -29,7 +48,6 @@ fn authorization_header_auth(
         digest: MessageDigest::sha256(),
         key: public_key,
     };
-    log::info!("Header: {}", header.clone());
     let mut header_parts = header.split_whitespace();
     if Some("Bearer").ne(&header_parts.next()) {
         return Err("Authorization header must start with 'Bearer '!".into());

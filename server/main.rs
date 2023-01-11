@@ -73,9 +73,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     balancer_updater(balancer.clone(), client.clone(), pubsub_client.clone());
 
-    let tx_metrics = metrics::spawn(params.metrics_addr.parse().unwrap());
+    metrics::spawn(params.metrics_addr.parse().unwrap());
 
-    let tx_signatures = spawn_tx_signature_watcher(client.clone(), tx_metrics.clone()).unwrap();
+    let tx_signatures = spawn_tx_signature_watcher(client.clone()).unwrap();
 
     {
         let balancer = balancer.clone();
@@ -126,7 +126,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         params.rpc_addr.parse().unwrap(),
         params.jwt_public_key,
         balancer.clone(),
-        tx_metrics.clone(),
         tx_signatures,
     );
 
@@ -136,7 +135,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         params.tls_grpc_server_key,
         params.tls_grpc_ca_cert,
         balancer.clone(),
-        tx_metrics.clone(),
     )
     .await?;
 
