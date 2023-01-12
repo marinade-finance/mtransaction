@@ -3,11 +3,13 @@ pub mod grpc_client;
 pub mod metrics;
 pub mod quic_forwarder;
 pub mod rpc_forwarder;
+pub mod watcher;
 
 use crate::forwarder::spawn_forwarder;
 use crate::grpc_client::spawn_grpc_client;
+use crate::watcher::{check_validator, spawn_watcher};
 use env_logger::Env;
-use log::info;
+use log::{error, info};
 use solana_sdk::signature::read_keypair_file;
 use structopt::StructOpt;
 
@@ -39,6 +41,9 @@ struct Params {
     #[structopt(long = "rpc-url")]
     rpc_url: Option<String>,
 
+    #[structopt(long = "monitor-validator")]
+    monitor_validator: bool,
+
     #[structopt(long = "blackhole")]
     blackhole: bool,
 
@@ -69,15 +74,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params.throttle_parallel,
     );
 
-    spawn_grpc_client(
-        params.grpc_url.parse().unwrap(),
-        params.tls_grpc_ca_cert,
-        params.tls_grpc_client_key,
-        params.tls_grpc_client_cert,
-        tx_transactions,
-        metrics,
-    )
-    .await?;
+    if params.monitor_validator {
+        match check_validator().await {
+            Ok(watcher::ValidatorStatus::Online) => {
+                let exit_signal = spawn_watcher();
+                spawn_grpc_client(
+                    params.grpc_url.parse().unwrap(),
+                    params.tls_grpc_ca_cert,
+                    params.tls_grpc_client_key,
+                    params.tls_grpc_client_cert,
+                    tx_transactions,
+                    metrics,
+                    Some(exit_signal),
+                )
+                .await?;
+            }
+            Ok(watcher::ValidatorStatus::Offline) | Err(_) => {
+                error!("Validator status: Offline");
+            }
+        }
+    } else {
+        spawn_grpc_client(
+            params.grpc_url.parse().unwrap(),
+            params.tls_grpc_ca_cert,
+            params.tls_grpc_client_key,
+            params.tls_grpc_client_cert,
+            tx_transactions,
+            metrics,
+            None,
+        )
+        .await?;
+    }
 
     info!("Service stopped.");
     Ok(())
