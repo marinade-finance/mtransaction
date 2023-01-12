@@ -1,5 +1,7 @@
-# mTransaction
-This project is in a *closed BETA* phase. If you are a validator/dApp/Trader/whoever might benefit from using this project, feel free to reach out to us e.g. on discord and we will be happy to test this product with you!
+# mTransaction, priority transactions on Solana
+
+## How to sign up for the closed BETA?
+This project is in a *closed BETA* phase. If you are a validator/dApp/Trader/whoever might benefit from using this project, reach out to us via [the validator signup](https://tally.so/r/mBEdAN) or [the searcher signup](https://tally.so/r/3xVMJk) and we will be happy to test this product with you! We're slowly onboarding new searchers and validators to the system.
 
 ## What is mTransaction?
 mTransaction is an RPC-like service that allows Solana users to send transactions to block-producers.
@@ -31,6 +33,11 @@ git clone https://github.com/marinade-finance/mtransaction
 cd mtransaction
 
 # If you want to build the `mtx-client` yourself:
+# # Make sure you have the neccesary rust-specific dependencies:
+# # 1) rust:
+# curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# # 2) Other rust develepment packages:
+# sudo apt install make build-essential pkg-config libssl-dev
 #
 # # Install gRPC dependency
 # sudo apt install protobuf-compiler
@@ -42,7 +49,7 @@ cd mtransaction
 # sudo cp ./target/release/mtx-client /usr/local/bin/mtx-client
 
 # If you do not want to build `mtx-client` yourself, download it
-sudo curl -LSfs https://public.marinade.finance/mtx-client -o /usr/local/bin/mtx-client
+sudo curl -LSfs 'https://github.com/marinade-finance/mtransaction/releases/download/refs%2Fheads%2Fmaster/mtx-client' -o /usr/local/bin/mtx-client
 sudo chmod +x /usr/local/bin/mtx-client
 
 # Generate certificate used by `mtx-client` to connect to `mtx-server`
@@ -65,16 +72,16 @@ cat <<EOF | sudo tee /lib/systemd/system/mtx-client.service
 Description=MTX Client
 
 [Service]
-ExecStart=/usr/local/bin/mtx-client \
-  --tls-grpc-ca-cert     /etc/ssl/certs/mtx.ca.cert \
-  --tls-grpc-client-key  /<path to the repository>/certs/mtx.IDENTITY.key \
-  --tls-grpc-client-cert /<path to the repository>/certs/mtx.IDENTITY.cert \
-  --grpc-url             https://****.marinade.finance:50051 `# You will be assigned URL during onboarding` \
-  --tpu-addr             TPU_ADDR `# Only use with option 1); Replace TPU_ADDR by your public IP` \
+ExecStart=/usr/local/bin/mtx-client \\
+  --tls-grpc-ca-cert     /etc/ssl/certs/mtx.ca.cert \\
+  --tls-grpc-client-key  /<path to the repository>/certs/mtx.IDENTITY.key \\
+  --tls-grpc-client-cert /<path to the repository>/certs/mtx.IDENTITY.cert \\
+  --grpc-url             https://****.marinade.finance:50051 `# You will be assigned URL during onboarding` \\
+  --tpu-addr             TPU_ADDR `# Only use with option 1); Replace TPU_ADDR by your public IP` \\
   --identity             /.../key.json `# Only use with option 1); Provide path to your identity`
 # --rpc-url              http://127.0.0.1:8899 `# Only use with option 2)`
 
-Restart=on-failure
+Restart=always
 RestartSec=10s
 
 [Install]
@@ -130,6 +137,9 @@ sudo apt install -y protobuf-compiler libprotobuf-dev
 
 # Alpine
 apk add protoc protobuf-dev
+
+# MacOS
+brew install protobuf
 ```
 
 Useful commands:

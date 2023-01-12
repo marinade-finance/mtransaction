@@ -32,7 +32,7 @@ then
   cat "$CERTS/client.req"
 elif [[ $CMD == "sign" ]]
 then
-  VALIDATOR=$(openssl req -noout -in "./certs/client.req" --subject | awk '{print $NF}')
+  VALIDATOR=$(openssl req -noout -in "./certs/client.req" -subject | awk -F '=' '{print $NF}')
   openssl req -noout -text -in "$CERTS/client.req"
 
   echo "Certificate is meant for validator: [$VALIDATOR]"

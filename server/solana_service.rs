@@ -1,4 +1,4 @@
-use crate::metrics::Metric;
+use crate::metrics;
 use log::{debug, error, info};
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient,
@@ -140,7 +140,6 @@ struct SignatureRecord {
 }
 pub fn spawn_tx_signature_watcher(
     client: Arc<RpcClient>,
-    tx_metrics: UnboundedSender<Vec<Metric>>,
 ) -> Result<UnboundedSender<Signature>, Box<dyn Error + Send + Sync>> {
     let (tx_signature, rx_signature) = unbounded_channel::<Signature>();
 
@@ -172,36 +171,9 @@ pub fn spawn_tx_signature_watcher(
                             break;
                         }
                         {
-                            let client = client.clone();
                             let bundle = signature_queue.drain(0..to_be_bundled_count).map(|r| r.signature).collect::<Vec<_>>();
-                            let tx_metrics = tx_metrics.clone();
 
-                            tokio::spawn(async move {
-                                match client.get_signature_statuses(&bundle) {
-                                    Ok(response) => {
-                                        for signature_status in response.value {
-                                            if let Some(known_status) = signature_status {
-                                                info!("Signature status {:?}", known_status);
-                                                if let Err(err) = tx_metrics.send(vec![Metric::ChainTxFinalized, Metric::ChainTxSlot { slot: known_status.slot }]) {
-                                                    error!("Failed to propagate metrics: {}", err);
-                                                }
-                                            } else {
-                                                if let Err(err) = tx_metrics.send(vec![Metric::ChainTxTimeout]) {
-                                                    error!("Failed to propagate metrics: {}", err);
-                                                }
-                                            }
-                                        }
-                                    },
-                                    Err(err) => {
-                                        let timeout_metrics = std::iter::repeat(Metric::ChainTxTimeout).take(bundle.len()).collect();
-                                        if let Err(err) = tx_metrics.send(timeout_metrics) {
-                                            error!("Failed to propagate metrics: {}", err);
-                                        }
-                                        error!("Failed to get signature statuses: {}", err);
-                                    }
-                                }
-
-                            });
+                            spawn_signature_checker(client.clone(), bundle);
                         }
                     }
                 },
@@ -220,4 +192,29 @@ pub fn spawn_tx_signature_watcher(
     });
 
     Ok(tx_signature)
+}
+
+fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<Signature>) {
+    tokio::spawn(async move {
+        match client.get_signature_statuses(&bundle) {
+            Ok(response) => {
+                for signature_status in response.value {
+                    if let Some(known_status) = signature_status {
+                        info!("Signature status {:?}", known_status);
+                        match known_status.err {
+                            Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS.inc(),
+                            _ => metrics::CHAIN_TX_EXECUTION_SUCCESS.inc(),
+                        };
+                        metrics::CHAIN_TX_FINALIZED.inc();
+                    } else {
+                        metrics::CHAIN_TX_TIMEOUT.inc();
+                    }
+                }
+            }
+            Err(err) => {
+                error!("Failed to get signature statuses: {}", err);
+                metrics::CHAIN_TX_TIMEOUT.inc_by(bundle.len() as u64);
+            }
+        }
+    });
 }

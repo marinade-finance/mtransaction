@@ -1,0 +1,80 @@
+on:
+  push:
+    tags:
+      - '*'
+name: release
+
+jobs:
+  build_and_test:
+    name: Build mTransaction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - name: Archive mtx-server
+        uses: actions/upload-artifact@v3
+        with:
+          name: mtx-server
+          path: |
+            target/release/mtx-server
+      - name: Archive mtx-client
+        uses: actions/upload-artifact@v3
+        with:
+          name: mtx-client
+          path: |
+            target/release/mtx-client
+  draft_release:
+    name: Draft release
+    runs-on: ubuntu-latest
+    needs: build_and_test
+    steps:
+      - name: ${{ github.ref_name }}
+        uses: actions/create-release@v1
+        id: draft_release
+        with:
+          draft: true
+          prerelease: false
+          release_name: Release draft
+          tag_name: ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Get mtx-server artifact
+        id: mtx_server_artifact
+        uses: actions/download-artifact@master
+        with:
+          name: mtx-server
+          path: .
+      - name: Get mtx-client artifact
+        id: mtx_client_artifact
+        uses: actions/download-artifact@master
+        with:
+          name: mtx-client
+          path: .
+      - name: Attach mtx-server artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          upload_url: ${{ steps.draft_release.outputs.upload_url }}
+          asset_path: ./mtx-server
+          asset_name: mtx-server
+          asset_content_type: application/x-elf
+      - name: Attach mtx-client artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          upload_url: ${{ steps.draft_release.outputs.upload_url }}
+          asset_path: ./mtx-client
+          asset_name: mtx-client
+          asset_content_type: application/x-elf

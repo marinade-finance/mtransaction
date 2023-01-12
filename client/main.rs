@@ -7,12 +7,10 @@ pub mod watcher;
 
 use crate::forwarder::spawn_forwarder;
 use crate::grpc_client::spawn_grpc_client;
-use crate::metrics::Metrics;
 use crate::watcher::{check_validator, spawn_watcher};
 use env_logger::Env;
 use log::{error, info};
 use solana_sdk::signature::read_keypair_file;
-use std::sync::Arc;
 use structopt::StructOpt;
 
 pub const VERSION: &str = "rust-0.0.0-alpha";
@@ -37,6 +35,9 @@ struct Params {
     #[structopt(long = "tpu-addr")]
     tpu_addr: Option<String>,
 
+    #[structopt(long = "metrics-addr", default_value = "127.0.0.1:9091")]
+    metrics_addr: String,
+
     #[structopt(long = "rpc-url")]
     rpc_url: Option<String>,
 
@@ -46,7 +47,7 @@ struct Params {
     #[structopt(long = "blackhole")]
     blackhole: bool,
 
-    #[structopt(long = "throttle-parallel", default_value = "100")]
+    #[structopt(long = "throttle-parallel", default_value = "1000")]
     throttle_parallel: usize,
 }
 
@@ -63,13 +64,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (None, None),
     };
 
-    let metrics = Arc::new(Metrics::default());
+    let metrics = metrics::spawn_metrics(params.metrics_addr.parse().unwrap());
 
     let tx_transactions = spawn_forwarder(
         identity,
         tpu_addr,
         params.rpc_url,
-        metrics.clone(),
         params.blackhole,
         params.throttle_parallel,
     );
@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     params.tls_grpc_client_key,
                     params.tls_grpc_client_cert,
                     tx_transactions,
-                    metrics.clone(),
+                    metrics,
                     Some(exit_signal),
                 )
                 .await?;
@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             params.tls_grpc_client_key,
             params.tls_grpc_client_cert,
             tx_transactions,
-            metrics.clone(),
+            metrics,
             None,
         )
         .await?;

@@ -1,6 +1,5 @@
 use crate::auth::{authenticate, load_public_key, Auth};
-use crate::balancer::*;
-use crate::metrics::Metric;
+use crate::{balancer::*, metrics};
 use bincode::config::Options;
 use jsonrpc_core::{BoxFuture, MetaIoHandler, Metadata, Result};
 use jsonrpc_derive::rpc;
@@ -18,7 +17,6 @@ use tokio::sync::{mpsc::UnboundedSender, RwLock};
 pub struct RpcMetadata {
     auth: std::result::Result<Auth, String>,
     balancer: Arc<RwLock<Balancer>>,
-    tx_metrics: UnboundedSender<Vec<Metric>>,
     tx_signatures: UnboundedSender<Signature>,
 }
 impl Metadata for RpcMetadata {}
@@ -37,7 +35,10 @@ pub trait Rpc {
         meta: Self::Metadata,
         data: String,
         config: Option<SendPriorityTransactionConfig>,
-    ) -> BoxFuture<Result<()>>;
+    ) -> BoxFuture<Result<String>>;
+
+    #[rpc(name = "getHealth")]
+    fn get_health(&self) -> Result<()>;
 }
 
 #[derive(Default)]
@@ -50,7 +51,7 @@ impl Rpc for RpcServer {
         meta: Self::Metadata,
         data: String,
         _config: Option<SendPriorityTransactionConfig>,
-    ) -> BoxFuture<Result<()>> {
+    ) -> BoxFuture<Result<String>> {
         let auth = match meta.auth {
             Ok(auth) => auth,
             Err(err) => {
@@ -66,14 +67,10 @@ impl Rpc for RpcServer {
         };
 
         info!("RPC method sendPriorityTransaction called: {:?}", auth);
-        if let Err(err) = meta.tx_metrics.send(vec![
-            Metric::ServerRpcTxAccepted,
-            Metric::ServerRpcTxBytesIn {
-                bytes: data.len() as u64,
-            },
-        ]) {
-            error!("Failed to update RPC metrics: {}", err);
-        }
+        metrics::SERVER_RPC_TX_ACCEPTED
+            .with_label_values(&[&auth.to_string()])
+            .inc();
+        metrics::SERVER_RPC_TX_BYTES_IN.inc_by(data.len() as u64);
 
         let wire_transaction = base64::decode(&data).unwrap();
         let decoded: Result<VersionedTransaction> = bincode::options()
@@ -82,7 +79,7 @@ impl Rpc for RpcServer {
             .allow_trailing_bytes()
             .deserialize_from(&wire_transaction[..])
             .map_err(|err| {
-                info!("Deserialize error: {}", err);
+                error!("Deserialize error: {}", err);
                 jsonrpc_core::error::Error::invalid_params(&err.to_string())
             });
 
@@ -115,7 +112,7 @@ impl Rpc for RpcServer {
                 .publish(signature.to_string(), data)
                 .await
             {
-                Ok(_) => Ok(()),
+                Ok(_) => Ok(signature.to_string()),
                 Err(_) => Err(jsonrpc_core::error::Error {
                     code: jsonrpc_core::error::ErrorCode::InternalError,
                     message: "Failed to forward the transaction".into(),
@@ -123,6 +120,10 @@ impl Rpc for RpcServer {
                 }),
             }
         })
+    }
+
+    fn get_health(&self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -137,7 +138,6 @@ pub fn spawn_rpc_server(
     rpc_addr: std::net::SocketAddr,
     jwt_public_key_path: String,
     balancer: Arc<RwLock<Balancer>>,
-    tx_metrics: UnboundedSender<Vec<Metric>>,
     tx_signatures: UnboundedSender<Signature>,
 ) -> Server {
     info!("Spawning RPC server.");
@@ -158,7 +158,6 @@ pub fn spawn_rpc_server(
                 auth: authenticate((*public_key).clone(), auth_header)
                     .map_err(|err| err.to_string()),
                 balancer: balancer.clone(),
-                tx_metrics: tx_metrics.clone(),
                 tx_signatures: tx_signatures.clone(),
             }
         },
@@ -166,6 +165,7 @@ pub fn spawn_rpc_server(
     .cors(DomainsValidation::AllowOnly(vec![
         AccessControlAllowOrigin::Any,
     ]))
+    .health_api(("/health", "getHealth"))
     .threads(64)
     .start_http(&rpc_addr)
     .expect("Unable to start TCP RPC server")

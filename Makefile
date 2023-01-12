@@ -40,22 +40,11 @@ run-client-local: build-client
 		--tls-grpc-ca-cert     ./certs/ca.cert \
 		--tls-grpc-client-key  ./certs/client.$(client).key \
 		--tls-grpc-client-cert ./certs/client.$(client).cert \
-		--grpc-url             http://localhost:50051 \
-		--tpu-addr             "$(tpu)"
+		--rpc-url              http://127.0.0.1:8899
 
-run-client-local:
-	TLS_GRPC_SERVER_CERT=./certs/ca.cert \
-	TLS_GRPC_CLIENT_KEY=./certs/client.$(client).key \
-	TLS_GRPC_CLIENT_CERT=./certs/client.$(client).cert \
-	GRPC_SERVER_ADDR=localhost:50051 \
-	THROTTLE_LIMIT=100 \
-		node ./client/mconnector.js
-
-run-client:
-	TLS_GRPC_SERVER_CERT=./certs/mtx-dev-eu-central-1.marinade.finance.cert \
-	TLS_GRPC_CLIENT_KEY=./certs/client.$(client).key \
-	TLS_GRPC_CLIENT_CERT=./certs/client.$(client).cert \
-	GRPC_SERVER_ADDR=mtx-dev-eu-central-1.marinade.finance:50051 \
-	SOLANA_CLUSTER_URL=http://localhost:8899 \
-	THROTTLE_LIMIT=100 \
-		node ./client/mconnector.js
+run-client-blackhole: build-client
+	cargo run --bin mtx-client -- \
+		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--tls-grpc-client-key  ./certs/client.$(client).key \
+		--tls-grpc-client-cert ./certs/client.$(client).cert \
+		--blackhole
