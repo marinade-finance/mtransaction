@@ -54,11 +54,11 @@ sudo chmod +x /usr/local/bin/mtx-client
 
 # Generate certificate used by `mtx-client` to connect to `mtx-server`
 # Replace IDENTITY by public key of your validator's identity
-make cert-client cmd=req validator=IDENTITY
+make cert-client cmd=req validator=<your_validator_identity_publickey>
 
 # !!! IMPORTANT STEP
 # Send ./certs/client.req to Marinade to have it signed by Marinade's certificate authority
-# You should then receive `client.IDENTITY.cert`
+# You should then receive `client.<your_validator_identity_publickey>.cert`
 
 # Adjust privileges
 chmod 0644 ./certs/client.*
