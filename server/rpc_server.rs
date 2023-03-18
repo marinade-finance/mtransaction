@@ -172,12 +172,7 @@ pub fn spawn_rpc_server(
         load_public_key(jwt_public_key_path)
             .expect("Failed to load public key used to verify JWTs"),
     );
-    let partners = if let Some(test_partners) = test_partners {
-        info!("Test partners loaded: {:?}", &test_partners);
-        test_partners
-    } else {
-        Vec::new()
-    };
+    let partners = test_partners.unwrap_or_default();
 
     ServerBuilder::with_meta_extractor(
         get_io_handler(),

@@ -124,6 +124,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+    if let Some(partners) = &params.test_partners {
+        info!("Test partners loaded: {:?}", &partners);
+    }
 
     let _rpc_server = spawn_rpc_server(
         params.rpc_addr.parse().unwrap(),
