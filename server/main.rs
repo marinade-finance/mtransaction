@@ -51,6 +51,9 @@ struct Params {
     #[structopt(long = "rpc-commitment", default_value = "finalized")]
     rpc_commitment: String,
 
+    #[structopt(long = "test-partners")]
+    test_partners: Option<Vec<String>>,
+
     #[structopt(long = "stake-override-identity")]
     stake_override_identity: Vec<String>,
 
@@ -125,6 +128,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let _rpc_server = spawn_rpc_server(
         params.rpc_addr.parse().unwrap(),
         params.jwt_public_key,
+        params.test_partners,
         balancer.clone(),
         tx_signatures,
     );
