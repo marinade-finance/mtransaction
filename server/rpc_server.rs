@@ -85,7 +85,7 @@ impl Rpc for RpcServer {
 
         info!("RPC method sendPriorityTransaction called: {:?}", auth);
         metrics::SERVER_RPC_TX_ACCEPTED
-            .with_label_values(&[&auth.to_string()])
+            .with_label_values(&[&auth.to_string(), &meta.mode.to_string()])
             .inc();
         metrics::SERVER_RPC_TX_BYTES_IN.inc_by(data.len() as u64);
 

@@ -58,7 +58,7 @@ lazy_static! {
     pub static ref SERVER_RPC_TX_ACCEPTED: IntGaugeVec = register_int_gauge_vec!(
         "mtx_server_rpc_tx_accepted",
         "How many transactions were accepted by the server",
-        &["partner"]
+        &["partner", "mode"]
     )
     .unwrap();
     pub static ref SERVER_RPC_TX_BYTES_IN: IntCounter = register_int_counter!(
