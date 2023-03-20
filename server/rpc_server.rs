@@ -1,4 +1,5 @@
 use crate::auth::{authenticate, load_public_key, Auth};
+use crate::solana_service::SignatureWrapper;
 use crate::{balancer::*, metrics};
 use bincode::config::Options;
 use jsonrpc_core::{BoxFuture, MetaIoHandler, Metadata, Result};
@@ -6,18 +7,33 @@ use jsonrpc_derive::rpc;
 use jsonrpc_http_server::hyper::http::header::AUTHORIZATION;
 use jsonrpc_http_server::*;
 use log::{error, info};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
-use solana_sdk::{
-    packet::PACKET_DATA_SIZE, signature::Signature, transaction::VersionedTransaction,
-};
-use std::sync::Arc;
+use solana_sdk::{packet::PACKET_DATA_SIZE, transaction::VersionedTransaction};
+use std::{fmt, sync::Arc};
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Mode {
+    BLACKHOLE,
+    FORWARD,
+}
+
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Mode::BLACKHOLE => write!(f, "BLACKHOLE"),
+            Mode::FORWARD => write!(f, "FORWARD"),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct RpcMetadata {
     auth: std::result::Result<Auth, String>,
     balancer: Arc<RwLock<Balancer>>,
-    tx_signatures: UnboundedSender<Signature>,
+    tx_signatures: UnboundedSender<SignatureWrapper>,
+    mode: Mode,
 }
 impl Metadata for RpcMetadata {}
 
@@ -68,7 +84,7 @@ impl Rpc for RpcServer {
 
         info!("RPC method sendPriorityTransaction called: {:?}", auth);
         metrics::SERVER_RPC_TX_ACCEPTED
-            .with_label_values(&[&auth.to_string()])
+            .with_label_values(&[&auth.to_string(), &meta.mode.to_string()])
             .inc();
         metrics::SERVER_RPC_TX_BYTES_IN.inc_by(data.len() as u64);
 
@@ -100,8 +116,17 @@ impl Rpc for RpcServer {
             Err(err) => return Box::pin(async move { Err(err) }),
         };
 
-        if let Err(err) = meta.tx_signatures.send(signature.clone()) {
+        if let Err(err) = meta.tx_signatures.send(SignatureWrapper {
+            signature: signature.clone(),
+            partner_name: auth.to_string(),
+            mode: meta.mode.clone(),
+        }) {
             error!("Failed to propagate signature to the watcher: {}", err);
+        }
+
+        if meta.mode == Mode::BLACKHOLE {
+            info!("Transaction blackholed: {}", signature.to_string());
+            return Box::pin(async move { Ok(signature.to_string()) });
         }
 
         Box::pin(async move {
@@ -134,17 +159,33 @@ pub fn get_io_handler() -> MetaIoHandler<RpcMetadata> {
     io
 }
 
+fn select_mode(auth: Option<Auth>, partners: Vec<String>) -> Mode {
+    let mut mode = Mode::FORWARD;
+
+    if let Some(auth) = auth {
+        if partners.contains(&auth.to_string()) {
+            let mut rng = rand::thread_rng();
+            if rng.gen::<bool>() {
+                mode = Mode::BLACKHOLE;
+            }
+        }
+    }
+    mode
+}
+
 pub fn spawn_rpc_server(
     rpc_addr: std::net::SocketAddr,
     jwt_public_key_path: String,
+    test_partners: Option<Vec<String>>,
     balancer: Arc<RwLock<Balancer>>,
-    tx_signatures: UnboundedSender<Signature>,
+    tx_signatures: UnboundedSender<SignatureWrapper>,
 ) -> Server {
     info!("Spawning RPC server.");
     let public_key = Arc::new(
         load_public_key(jwt_public_key_path)
             .expect("Failed to load public key used to verify JWTs"),
     );
+    let partners = test_partners.unwrap_or_default();
 
     ServerBuilder::with_meta_extractor(
         get_io_handler(),
@@ -153,12 +194,14 @@ pub fn spawn_rpc_server(
                 .headers()
                 .get(AUTHORIZATION)
                 .map(|header_value| header_value.to_str().unwrap().to_string());
+            let auth =
+                authenticate((*public_key).clone(), auth_header).map_err(|err| err.to_string());
 
             RpcMetadata {
-                auth: authenticate((*public_key).clone(), auth_header)
-                    .map_err(|err| err.to_string()),
+                auth: auth.clone(),
                 balancer: balancer.clone(),
                 tx_signatures: tx_signatures.clone(),
+                mode: select_mode(auth.clone().ok(), partners.clone()),
             }
         },
     )

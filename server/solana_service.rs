@@ -1,4 +1,4 @@
-use crate::metrics;
+use crate::{metrics, rpc_server::Mode};
 use log::{debug, error, info};
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient,
@@ -137,11 +137,21 @@ pub fn leaders_stream(
 struct SignatureRecord {
     created_at: tokio::time::Instant,
     signature: Signature,
+    mode: Mode,
+    partner_name: String,
 }
+
+#[derive(Debug, Clone)]
+pub struct SignatureWrapper {
+    pub signature: Signature,
+    pub partner_name: String,
+    pub mode: Mode,
+}
+
 pub fn spawn_tx_signature_watcher(
     client: Arc<RpcClient>,
-) -> Result<UnboundedSender<Signature>, Box<dyn Error + Send + Sync>> {
-    let (tx_signature, rx_signature) = unbounded_channel::<Signature>();
+) -> Result<UnboundedSender<SignatureWrapper>, Box<dyn Error + Send + Sync>> {
+    let (tx_signature, rx_signature) = unbounded_channel::<SignatureWrapper>();
 
     let mut rx_signature = UnboundedReceiverStream::new(rx_signature);
 
@@ -171,18 +181,24 @@ pub fn spawn_tx_signature_watcher(
                             break;
                         }
                         {
-                            let bundle = signature_queue.drain(0..to_be_bundled_count).map(|r| r.signature).collect::<Vec<_>>();
+                            let bundle = signature_queue.drain(0..to_be_bundled_count).map(|r| SignatureWrapper {
+                                signature: r.signature,
+                                partner_name: r.partner_name,
+                                mode: r.mode,
+                            }).collect::<Vec<_>>();
 
                             spawn_signature_checker(client.clone(), bundle);
                         }
                     }
                 },
-                Some(signature) = rx_signature.next() => {
+                Some(wrapper) = rx_signature.next() => {
                     signature_queue.push_back(SignatureRecord {
                         created_at: tokio::time::Instant::now(),
-                        signature: signature.clone(),
+                        signature: wrapper.signature.clone(),
+                        partner_name: wrapper.partner_name,
+                        mode: wrapper.mode,
                     });
-                    info!("Will watch for {:?}", &signature);
+                    info!("Will watch for {:?}", &wrapper.signature);
                 },
                 else => break,
             }
@@ -194,26 +210,55 @@ pub fn spawn_tx_signature_watcher(
     Ok(tx_signature)
 }
 
-fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<Signature>) {
+fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureWrapper>) {
     tokio::spawn(async move {
-        match client.get_signature_statuses(&bundle) {
+        match client.get_signature_statuses(
+            &bundle
+                .iter()
+                .map(|f| f.signature)
+                .collect::<Vec<Signature>>(),
+        ) {
             Ok(response) => {
-                for signature_status in response.value {
+                for (i, signature_status) in response.value.iter().enumerate() {
+                    let wrapper = bundle.get(i).unwrap();
                     if let Some(known_status) = signature_status {
-                        info!("Signature status {:?}", known_status);
+                        info!(
+                            "Signature status {:?} | Partner: {:?} | Mode: {:?}",
+                            known_status,
+                            wrapper.partner_name,
+                            wrapper.mode.to_string()
+                        );
                         match known_status.err {
-                            Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS.inc(),
-                            _ => metrics::CHAIN_TX_EXECUTION_SUCCESS.inc(),
+                            Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS
+                                .with_label_values(&[
+                                    &wrapper.partner_name,
+                                    &wrapper.mode.to_string(),
+                                ])
+                                .inc(),
+                            _ => metrics::CHAIN_TX_EXECUTION_SUCCESS
+                                .with_label_values(&[
+                                    &wrapper.partner_name,
+                                    &wrapper.mode.to_string(),
+                                ])
+                                .inc(),
                         };
-                        metrics::CHAIN_TX_FINALIZED.inc();
+                        metrics::CHAIN_TX_FINALIZED
+                            .with_label_values(&[&wrapper.partner_name, &wrapper.mode.to_string()])
+                            .inc();
                     } else {
-                        metrics::CHAIN_TX_TIMEOUT.inc();
+                        metrics::CHAIN_TX_TIMEOUT
+                            .with_label_values(&[&wrapper.partner_name, &wrapper.mode.to_string()])
+                            .inc();
                     }
                 }
             }
             Err(err) => {
                 error!("Failed to get signature statuses: {}", err);
-                metrics::CHAIN_TX_TIMEOUT.inc_by(bundle.len() as u64);
+                for tx in bundle {
+                    metrics::CHAIN_TX_TIMEOUT
+                        .with_label_values(&[&tx.partner_name, &tx.mode.to_string()])
+                        .inc();
+                }
             }
         }
     });
