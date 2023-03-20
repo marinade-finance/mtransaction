@@ -20,6 +20,15 @@ pub enum Mode {
     FORWARD,
 }
 
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Mode::BLACKHOLE => write!(f, "BLACKHOLE"),
+            Mode::FORWARD => write!(f, "FORWARD"),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RpcMetadata {
     auth: std::result::Result<Auth, String>,
@@ -47,15 +56,6 @@ pub trait Rpc {
 
     #[rpc(name = "getHealth")]
     fn get_health(&self) -> Result<()>;
-}
-
-impl fmt::Display for Mode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Mode::BLACKHOLE => write!(f, "BLACKHOLE"),
-            Mode::FORWARD => write!(f, "FORWARD"),
-        }
-    }
 }
 
 #[derive(Default)]
@@ -160,6 +160,20 @@ pub fn get_io_handler() -> MetaIoHandler<RpcMetadata> {
     io
 }
 
+fn select_mode(auth: Option<Auth>, partners: Vec<String>) -> Mode {
+    let mut mode = Mode::FORWARD;
+
+    if let Some(auth) = auth {
+        if partners.contains(&auth.to_string()) {
+            let mut rng = rand::thread_rng();
+            if rng.gen::<bool>() {
+                mode = Mode::BLACKHOLE;
+            }
+        }
+    }
+    mode
+}
+
 pub fn spawn_rpc_server(
     rpc_addr: std::net::SocketAddr,
     jwt_public_key_path: String,
@@ -183,22 +197,12 @@ pub fn spawn_rpc_server(
                 .map(|header_value| header_value.to_str().unwrap().to_string());
             let auth =
                 authenticate((*public_key).clone(), auth_header).map_err(|err| err.to_string());
-            let mut mode = Mode::FORWARD;
-
-            if let Ok(auth) = auth.clone() {
-                if partners.contains(&auth.to_string()) {
-                    let mut rng = rand::thread_rng();
-                    if rng.gen::<bool>() {
-                        mode = Mode::BLACKHOLE;
-                    }
-                }
-            }
 
             RpcMetadata {
-                auth,
+                auth: auth.clone(),
                 balancer: balancer.clone(),
                 tx_signatures: tx_signatures.clone(),
-                mode,
+                mode: select_mode(auth.clone().ok(), partners.clone()),
             }
         },
     )

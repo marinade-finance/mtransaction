@@ -181,7 +181,11 @@ pub fn spawn_tx_signature_watcher(
                             break;
                         }
                         {
-                            let bundle = signature_queue.drain(0..to_be_bundled_count).map(|r| SignatureWrapper{signature:r.signature, partner_name: r.partner_name, mode: r.mode }).collect::<Vec<_>>();
+                            let bundle = signature_queue.drain(0..to_be_bundled_count).map(|r| SignatureWrapper {
+                                signature: r.signature,
+                                partner_name: r.partner_name,
+                                mode: r.mode,
+                            }).collect::<Vec<_>>();
 
                             spawn_signature_checker(client.clone(), bundle);
                         }
@@ -208,28 +212,15 @@ pub fn spawn_tx_signature_watcher(
 
 fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureWrapper>) {
     tokio::spawn(async move {
-        let (blackholed, forwarded): (Vec<_>, Vec<_>) =
-            bundle.iter().partition(|&s| s.mode == Mode::BLACKHOLE);
-
-        for blackholed_tx in blackholed {
-            info!(
-                "Signature status: BLACKHOLED | Partner: {:?} | Mode: {:?}",
-                blackholed_tx.partner_name,
-                blackholed_tx.mode.to_string()
-            );
-            metrics::CHAIN_TX_EXECUTION_SUCCESS
-                .with_label_values(&[&blackholed_tx.partner_name, &blackholed_tx.mode.to_string()])
-                .inc();
-        }
         match client.get_signature_statuses(
-            &forwarded
+            &bundle
                 .iter()
-                .map(|&f| f.signature)
+                .map(|f| f.signature)
                 .collect::<Vec<Signature>>(),
         ) {
             Ok(response) => {
                 for (i, signature_status) in response.value.iter().enumerate() {
-                    let wrapper = forwarded.get(i).unwrap();
+                    let wrapper = bundle.get(i).unwrap();
                     if let Some(known_status) = signature_status {
                         info!(
                             "Signature status {:?} | Partner: {:?} | Mode: {:?}",
@@ -263,7 +254,7 @@ fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureWrapper>
             }
             Err(err) => {
                 error!("Failed to get signature statuses: {}", err);
-                for tx in forwarded {
+                for tx in bundle {
                     metrics::CHAIN_TX_TIMEOUT
                         .with_label_values(&[&tx.partner_name, &tx.mode.to_string()])
                         .inc();
