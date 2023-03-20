@@ -10,8 +10,7 @@ use log::{error, info};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{packet::PACKET_DATA_SIZE, transaction::VersionedTransaction};
-use std::fmt;
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 
 #[derive(Clone, Debug, PartialEq)]
