@@ -102,7 +102,7 @@ sudo journalctl -u mtx-client -f
 ```
 
 ## For transaction senders
-Proper authentication/billing/... will be added later and this service is now provided for free to users of our closed beta.
+Proper authentication/billing/... will be added later and this service is now provided for free to users of our open beta.
 If you are interested in trying this service, reach out to us on discord.
 
 ### Send transaction
