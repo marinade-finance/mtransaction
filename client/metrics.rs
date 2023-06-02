@@ -1,6 +1,7 @@
 use crate::grpc_client::pb::{self, RequestMessageEnvelope};
 use lazy_static::lazy_static;
 use log::error;
+use memory_stats::memory_stats;
 use prometheus::{register_int_counter, Encoder, IntCounter, TextEncoder};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -33,6 +34,7 @@ fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
         tokio::sync::mpsc::channel::<RequestMessageEnvelope>(METRICS_BUFFER_SIZE);
     tokio::spawn(async move {
         loop {
+            let memory_physical = memory_stats().map_or(0, |usage| usage.physical_mem as u64);
             if let Err(err) = metrics_sender
                 .send(pb::RequestMessageEnvelope {
                     metrics: Some(pb::Metrics {
@@ -40,6 +42,7 @@ fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
                         tx_forward_succeeded: TX_FORWARD_SUCCEEDED_COUNT.get(),
                         tx_forward_failed: TX_FORWARD_FAILED_COUNT.get(),
                         version: crate::VERSION.to_string(),
+                        memory_physical,
                     }),
                     ..Default::default()
                 })

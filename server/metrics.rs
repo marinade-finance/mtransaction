@@ -25,6 +25,12 @@ lazy_static! {
         &["identity"]
     )
     .unwrap();
+    pub static ref CLIENT_MEMORY_PHYSICAL: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_client_memory_physical",
+        "Memory used by the client",
+        &["identity"]
+    )
+    .unwrap();
     pub static ref CLIENT_PING_RTT: HistogramVec = register_histogram_vec!(
         "mtx_client_ping_rtt",
         "Latency to the client based on ping times",

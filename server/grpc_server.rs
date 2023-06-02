@@ -103,6 +103,9 @@ fn handle_client_metrics(identity: &String, token: &String, metrics: pb::Metrics
     metrics::CLIENT_TX_FORWARD_FAILED
         .with_label_values(&[&identity])
         .set(metrics.tx_forward_failed as i64);
+    metrics::CLIENT_MEMORY_PHYSICAL
+        .with_label_values(&[&identity])
+        .set(metrics.memory_physical as i64);
 }
 
 fn handle_client_pong(identity: &String, pong: pb::Pong, last_ping: &Ping) {
