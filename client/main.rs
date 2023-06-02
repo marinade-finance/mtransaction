@@ -11,7 +11,7 @@ use log::info;
 use solana_sdk::signature::read_keypair_file;
 use structopt::StructOpt;
 
-pub const VERSION: &str = "rust-0.0.0-alpha";
+pub const VERSION: &str = "rust-0.0.7-beta";
 
 #[derive(Debug, StructOpt)]
 struct Params {
