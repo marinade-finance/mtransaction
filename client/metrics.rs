@@ -2,7 +2,9 @@ use crate::grpc_client::pb::{self, RequestMessageEnvelope};
 use lazy_static::lazy_static;
 use log::error;
 use memory_stats::memory_stats;
-use prometheus::{register_int_counter, Encoder, IntCounter, TextEncoder};
+use prometheus::{
+    register_int_counter, register_int_gauge, Encoder, IntCounter, IntGauge, TextEncoder,
+};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -27,6 +29,15 @@ lazy_static! {
         "How many transactions failed on the client side"
     )
     .unwrap();
+    pub static ref QUIC_FORWARDER_PERMITS_USED_MAX: IntGauge = register_int_gauge!(
+        "quic_forwarder_available_permits_max",
+        "QUIC concurrent tasks created at any single moment since the last metric feed to the server"
+    )
+    .unwrap();
+}
+
+pub fn observe_quic_forwarded_available_permits(permits_used: usize) {
+    QUIC_FORWARDER_PERMITS_USED_MAX.set(QUIC_FORWARDER_PERMITS_USED_MAX.get().max(permits_used as i64))
 }
 
 fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
@@ -42,6 +53,7 @@ fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
                         tx_forward_succeeded: TX_FORWARD_SUCCEEDED_COUNT.get(),
                         tx_forward_failed: TX_FORWARD_FAILED_COUNT.get(),
                         version: crate::VERSION.to_string(),
+                        quic_forwarder_permits_used_max: QUIC_FORWARDER_PERMITS_USED_MAX.get() as u64,
                         memory_physical,
                     }),
                     ..Default::default()
@@ -50,6 +62,7 @@ fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
             {
                 error!("Failed to feed client metrics: {}", err);
             }
+            QUIC_FORWARDER_PERMITS_USED_MAX.set(0);
             sleep(Duration::from_secs(METRICS_SYNC_TIME_IN_S)).await;
         }
     });

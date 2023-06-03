@@ -25,6 +25,12 @@ lazy_static! {
         &["identity"]
     )
     .unwrap();
+    pub static ref CLIENT_QUIC_FORWARDER_PERMITS_USED_MAX: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_client_quic_forwarder_available_permits_max",
+        "QUIC concurrent tasks created on the client side at any single moment since the last metric feed to the server",
+        &["identity"]
+    )
+    .unwrap();
     pub static ref CLIENT_MEMORY_PHYSICAL: IntGaugeVec = register_int_gauge_vec!(
         "mtx_client_memory_physical",
         "Memory used by the client",

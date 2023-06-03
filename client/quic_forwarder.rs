@@ -12,16 +12,13 @@ use std::{net::IpAddr, sync::Arc};
 use tokio::sync::Semaphore;
 
 pub struct QuicForwarder {
+    max_permits: usize,
     throttle_parallel: Arc<Semaphore>,
     connection_cache: Arc<ConnectionCache>,
 }
 
 impl QuicForwarder {
-    pub fn new(
-        identity: Option<Keypair>,
-        tpu_addr: Option<IpAddr>,
-        throttle_parallel: usize,
-    ) -> Self {
+    pub fn new(identity: Option<Keypair>, tpu_addr: Option<IpAddr>, max_permits: usize) -> Self {
         let mut connection_cache = ConnectionCache::new(DEFAULT_TPU_CONNECTION_POOL_SIZE);
         if let (Some(identity), Some(tpu_addr)) = (identity, tpu_addr) {
             if let Err(err) = connection_cache.update_client_certificate(&identity, tpu_addr) {
@@ -31,7 +28,8 @@ impl QuicForwarder {
         }
 
         Self {
-            throttle_parallel: Arc::new(Semaphore::new(throttle_parallel)),
+            max_permits,
+            throttle_parallel: Arc::new(Semaphore::new(max_permits)),
             connection_cache: Arc::new(connection_cache),
         }
     }
@@ -40,8 +38,13 @@ impl QuicForwarder {
         let tpu = tpu.clone();
         let throttle_parallel = self.throttle_parallel.clone();
         let connection_cache = self.connection_cache.clone();
+        let max_permits = self.max_permits;
 
         tokio::spawn(async move {
+            metrics::observe_quic_forwarded_available_permits(
+                max_permits - throttle_parallel.available_permits(),
+            );
+
             let tpu = tpu.parse().unwrap();
             let wire_transaction = decode(transaction.data).unwrap();
 
