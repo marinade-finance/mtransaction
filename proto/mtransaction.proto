@@ -42,4 +42,6 @@ message Metrics {
   uint64 tx_forward_succeeded = 2;
   uint64 tx_forward_failed = 3;
   string version = 4;
+  uint64 quic_forwarder_permits_used_max = 5;
+  uint64 memory_physical = 6;
 }

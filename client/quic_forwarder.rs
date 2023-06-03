@@ -9,24 +9,16 @@ use solana_client::{
 };
 use solana_sdk::{signature::Keypair, transport::TransportError};
 use std::{net::IpAddr, sync::Arc};
-use tokio::{
-    sync::Semaphore,
-    time::{timeout, Duration},
-};
-
-const SEND_TRANSACTION_TIMEOUT_MS: u64 = 10000;
+use tokio::sync::Semaphore;
 
 pub struct QuicForwarder {
+    max_permits: usize,
     throttle_parallel: Arc<Semaphore>,
     connection_cache: Arc<ConnectionCache>,
 }
 
 impl QuicForwarder {
-    pub fn new(
-        identity: Option<Keypair>,
-        tpu_addr: Option<IpAddr>,
-        throttle_parallel: usize,
-    ) -> Self {
+    pub fn new(identity: Option<Keypair>, tpu_addr: Option<IpAddr>, max_permits: usize) -> Self {
         let mut connection_cache = ConnectionCache::new(DEFAULT_TPU_CONNECTION_POOL_SIZE);
         if let (Some(identity), Some(tpu_addr)) = (identity, tpu_addr) {
             if let Err(err) = connection_cache.update_client_certificate(&identity, tpu_addr) {
@@ -36,7 +28,8 @@ impl QuicForwarder {
         }
 
         Self {
-            throttle_parallel: Arc::new(Semaphore::new(throttle_parallel)),
+            max_permits,
+            throttle_parallel: Arc::new(Semaphore::new(max_permits)),
             connection_cache: Arc::new(connection_cache),
         }
     }
@@ -45,8 +38,13 @@ impl QuicForwarder {
         let tpu = tpu.clone();
         let throttle_parallel = self.throttle_parallel.clone();
         let connection_cache = self.connection_cache.clone();
+        let max_permits = self.max_permits;
 
         tokio::spawn(async move {
+            metrics::observe_quic_forwarded_available_permits(
+                max_permits - throttle_parallel.available_permits(),
+            );
+
             let tpu = tpu.parse().unwrap();
             let wire_transaction = decode(transaction.data).unwrap();
 
@@ -54,31 +52,19 @@ impl QuicForwarder {
 
             info!("Tx {} -> {}", transaction.signature, &tpu);
             let conn = connection_cache.get_nonblocking_connection(&tpu);
+            let request_result = conn.send_wire_transaction(&wire_transaction).await;
+            Self::handle_send_result(request_result);
 
-            let result = timeout(
-                Duration::from_millis(SEND_TRANSACTION_TIMEOUT_MS),
-                conn.send_wire_transaction(&wire_transaction),
-            )
-            .await;
-
-            Self::handle_send_result(result);
             drop(throttle_permit);
         });
     }
 
-    fn handle_send_result(result: Result<Result<(), TransportError>, tokio::time::error::Elapsed>) {
-        match result {
-            Ok(result) => {
-                if let Err(err) = result {
-                    error!("Failed to send the transaction: {}", err);
-                    metrics::TX_FORWARD_FAILED_COUNT.inc();
-                } else {
-                    metrics::TX_FORWARD_SUCCEEDED_COUNT.inc();
-                }
-            }
-            Err(err) => {
-                error!("Timed out sending transaction {:?}", err);
-            }
+    fn handle_send_result(result: Result<(), TransportError>) {
+        if let Err(err) = result {
+            error!("Failed to send the transaction: {}", err);
+            metrics::TX_FORWARD_FAILED_COUNT.inc();
+        } else {
+            metrics::TX_FORWARD_SUCCEEDED_COUNT.inc();
         }
     }
 }
