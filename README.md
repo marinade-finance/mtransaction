@@ -1,7 +1,7 @@
 # mTransaction, priority transactions on Solana
 
-## How to sign up for the closed BETA?
-This project is in a *closed BETA* phase. If you are a validator/dApp/Trader/whoever might benefit from using this project, reach out to us via [the validator signup](https://tally.so/r/mBEdAN) or [the searcher signup](https://tally.so/r/3xVMJk) and we will be happy to test this product with you! We're slowly onboarding new searchers and validators to the system.
+## How to sign up for the open BETA?
+This project is in an *open BETA* phase. If you are a validator/dApp/Trader/whoever might benefit from using this project, reach out to us via [the validator signup](https://tally.so/r/mBEdAN) or [the searcher signup](https://tally.so/r/3xVMJk) and we will be happy to test this product with you! We're slowly onboarding new searchers and validators to the system.
 
 ## What is mTransaction?
 mTransaction is an RPC-like service that allows Solana users to send transactions to block-producers.
@@ -102,7 +102,7 @@ sudo journalctl -u mtx-client -f
 ```
 
 ## For transaction senders
-Proper authentication/billing/... will be added later and this service is now provided for free to users of our closed beta.
+Proper authentication/billing/... will be added later and this service is now provided for free to users of our open beta.
 If you are interested in trying this service, reach out to us on discord.
 
 ### Send transaction
