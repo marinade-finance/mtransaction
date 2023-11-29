@@ -163,6 +163,7 @@ fn select_mode(auth: Option<Auth>, partners: Vec<String>) -> Mode {
     let mut mode = Mode::FORWARD;
 
     if let Some(auth) = auth {
+				// If this is from a partner randomly blackhole based on rng?
         if partners.contains(&auth.to_string()) {
             let mut rng = rand::thread_rng();
             if rng.gen::<bool>() {
@@ -175,33 +176,44 @@ fn select_mode(auth: Option<Auth>, partners: Vec<String>) -> Mode {
 
 pub fn spawn_rpc_server(
     rpc_addr: std::net::SocketAddr,
-    jwt_public_key_path: String,
+    jwt_public_key_path: Option<String>,
     test_partners: Option<Vec<String>>,
     balancer: Arc<RwLock<Balancer>>,
     tx_signatures: UnboundedSender<SignatureWrapper>,
 ) -> Server {
     info!("Spawning RPC server.");
-    let public_key = Arc::new(
-        load_public_key(jwt_public_key_path)
-            .expect("Failed to load public key used to verify JWTs"),
-    );
+
+    let public_key = jwt_public_key_path.map(|jwt_public_key_path| Arc::new(
+	           load_public_key(jwt_public_key_path)
+						.expect("Failed to load public key used to verify JWTs"),
+				));
     let partners = test_partners.unwrap_or_default();
 
     ServerBuilder::with_meta_extractor(
         get_io_handler(),
         move |req: &hyper::Request<hyper::Body>| {
-            let auth_header = req
-                .headers()
-                .get(AUTHORIZATION)
-                .map(|header_value| header_value.to_str().unwrap().to_string());
-            let auth =
-                authenticate((*public_key).clone(), auth_header).map_err(|err| err.to_string());
+						// If we are using authentication, then check the auth header
+						// Otherwise just pass along allow and forward transactions
+            if let Some(public_key) = public_key.clone() {
+							let auth_header = req
+															.headers()
+															.get(AUTHORIZATION)
+															.map(|header_value| header_value.to_str().unwrap().to_string());
 
-            RpcMetadata {
+							let auth = authenticate((*public_key).clone(), auth_header).map_err(|err| err.to_string());
+							RpcMetadata {
                 auth: auth.clone(),
                 balancer: balancer.clone(),
                 tx_signatures: tx_signatures.clone(),
                 mode: select_mode(auth.clone().ok(), partners.clone()),
+							}
+            } else { 
+							RpcMetadata {
+								auth: Ok(Auth::Allow(String::from("internal"))),
+								balancer: balancer.clone(),
+                tx_signatures: tx_signatures.clone(),
+								mode: Mode::FORWARD,
+							}
             }
         },
     )

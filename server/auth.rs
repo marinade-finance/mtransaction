@@ -11,12 +11,14 @@ use std::io::{BufReader, Read};
 #[derive(Clone, Debug)]
 pub enum Auth {
     JWT(JWT),
+    Allow(String),
 }
 
 impl ToString for Auth {
     fn to_string(&self) -> String {
         match self {
             Auth::JWT(jwt) => jwt.to_string(),
+            Auth::Allow(identifier) => identifier.to_string(),
         }
     }
 }
