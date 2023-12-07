@@ -111,7 +111,6 @@ async fn get_tls_config(
         Some(
             ClientTlsConfig::new()
                 .ca_certificate(ca_cert)
-                .domain_name("localhost")
                 .identity(client_identity),
         )
     } else {
@@ -132,10 +131,12 @@ pub async fn spawn_grpc_client(
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;
+    let domain_name = grpc_url.host();
+
 
     info!("Opening the gRPC channel.");
     let channel = match tls {
-        Some(tls) => Channel::builder(grpc_url).tls_config(tls)?,
+        Some(tls) => Channel::builder(grpc_url.clone()).tls_config(tls.domain_name(domain_name.unwrap_or("localhost")))?,
         _ => Channel::builder(grpc_url),
     }
     .connect()
