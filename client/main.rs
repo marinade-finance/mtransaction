@@ -7,7 +7,8 @@ pub mod rpc_forwarder;
 use crate::forwarder::spawn_forwarder;
 use crate::grpc_client::spawn_grpc_client;
 use env_logger::Env;
-use log::info;
+use futures::TryFutureExt;
+use log::{info,error};
 use solana_sdk::signature::read_keypair_file;
 use structopt::StructOpt;
 
@@ -25,7 +26,7 @@ struct Params {
     tls_grpc_client_cert: Option<String>,
 
     #[structopt(long = "grpc-url", default_value = "http://127.0.0.1:50051")]
-    grpc_url: String,
+    grpc_urls: Vec<String>,
 
     #[structopt(long = "identity")]
     identity: Option<String>,
@@ -59,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => (None, None),
     };
 
-    let metrics = metrics::spawn_metrics(params.metrics_addr.parse().unwrap());
+    let _metrics = metrics::spawn_metrics(params.metrics_addr.parse().unwrap());
 
     let tx_transactions = spawn_forwarder(
         identity,
@@ -69,15 +70,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params.throttle_parallel,
     );
 
-    spawn_grpc_client(
-        params.grpc_url.parse().unwrap(),
-        params.tls_grpc_ca_cert,
-        params.tls_grpc_client_key,
-        params.tls_grpc_client_cert,
-        tx_transactions,
-        metrics,
-    )
-    .await?;
+    let tasks: Vec<_> = params.grpc_urls.clone()
+        .iter_mut()
+        .map(|grpc_url| {
+            tokio::spawn(
+                spawn_grpc_client(
+                    grpc_url.parse().unwrap(),
+                    params.tls_grpc_ca_cert.clone(),
+                    params.tls_grpc_client_key.clone(),
+                    params.tls_grpc_client_cert.clone(),
+                    tx_transactions.clone(),
+                    metrics::spawn_feeder(),
+                ).map_err(
+                    |err| error!("gRPC client failed: {}", err)
+                )
+            )})
+        .collect();
+
+    futures::future::join_all(tasks).await;
 
     info!("Service stopped.");
     Ok(())

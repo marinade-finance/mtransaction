@@ -83,6 +83,7 @@ async fn mtx_stream(
                 if let Some(response) = response {
                     process_upstream_message(response, tx_upstream_transactions.clone(), tx_transactions.clone());
                 } else {
+                    metrics.close();
                     error!("Upstream closed!");
                     break
                 }
@@ -134,15 +135,15 @@ pub async fn spawn_grpc_client(
     let domain_name = grpc_url.host();
 
 
-    info!("Opening the gRPC channel.");
+    info!("Opening the gRPC channel: {:?}", grpc_url.host());
     let channel = match tls {
         Some(tls) => Channel::builder(grpc_url.clone()).tls_config(tls.domain_name(domain_name.unwrap_or("localhost")))?,
-        _ => Channel::builder(grpc_url),
+        _ => Channel::builder(grpc_url.clone()),
     }
     .connect()
     .await?;
 
-    info!("Streaming from gRPC server.");
+    info!("Streaming from gRPC server: {:?}", grpc_url.host());
     let mut client = MTransactionClient::new(channel);
     mtx_stream(&mut client, tx_transactions, metrics).await;
 

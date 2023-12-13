@@ -40,7 +40,7 @@ pub fn observe_quic_forwarded_available_permits(permits_used: usize) {
     QUIC_FORWARDER_PERMITS_USED_MAX.set(QUIC_FORWARDER_PERMITS_USED_MAX.get().max(permits_used as i64))
 }
 
-fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
+pub fn spawn_feeder() -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
     let (metrics_sender, metrics_receiver) =
         tokio::sync::mpsc::channel::<RequestMessageEnvelope>(METRICS_BUFFER_SIZE);
     tokio::spawn(async move {
@@ -79,7 +79,7 @@ fn collect_metrics() -> String {
 
 pub fn spawn_metrics(
     metrics_addr: std::net::SocketAddr,
-) -> tokio::sync::mpsc::Receiver<RequestMessageEnvelope> {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let route_metrics = warp::path!("metrics")
             .and(warp::path::end())
@@ -88,6 +88,5 @@ pub fn spawn_metrics(
         warp::serve(route_metrics).run(metrics_addr).await;
         error!("Metrics server is not up.");
         std::process::exit(1);
-    });
-    spawn_feeder()
+    })
 }
