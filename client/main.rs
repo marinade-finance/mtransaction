@@ -8,9 +8,10 @@ use crate::forwarder::spawn_forwarder;
 use crate::grpc_client::spawn_grpc_client;
 use env_logger::Env;
 use futures::TryFutureExt;
-use log::{info,error};
+use log::{error, info};
 use solana_sdk::signature::read_keypair_file;
 use structopt::StructOpt;
+use tonic::transport::Uri;
 
 pub const VERSION: &str = "rust-0.0.7-beta";
 
@@ -70,21 +71,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params.throttle_parallel,
     );
 
-    let tasks: Vec<_> = params.grpc_urls.clone()
+    let tasks: Vec<_> = params
+        .grpc_urls
+        .clone()
         .iter_mut()
         .map(|grpc_url| {
+            let grpc_parsed_url: Uri = grpc_url.parse().unwrap();
             tokio::spawn(
                 spawn_grpc_client(
-                    grpc_url.parse().unwrap(),
+                    grpc_parsed_url.clone(),
                     params.tls_grpc_ca_cert.clone(),
                     params.tls_grpc_client_key.clone(),
                     params.tls_grpc_client_cert.clone(),
                     tx_transactions.clone(),
-                    metrics::spawn_feeder(),
-                ).map_err(
-                    |err| error!("gRPC client failed: {}", err)
+                    metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string()),
                 )
-            )})
+                .map_err(|err| error!("gRPC client failed: {}", err)),
+            )
+        })
         .collect();
 
     futures::future::join_all(tasks).await;

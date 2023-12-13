@@ -1,10 +1,11 @@
 pub mod pb {
     tonic::include_proto!("validator");
 }
+use crate::forwarder::ForwardedTransaction;
 use log::{error, info, warn};
 use pb::{
     m_transaction_client::MTransactionClient, Ping, Pong, RequestMessageEnvelope,
-    ResponseMessageEnvelope, Transaction,
+    ResponseMessageEnvelope,
 };
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::StreamExt;
@@ -23,16 +24,20 @@ fn process_ping(ping: Ping, tx_upstream_transactions: UnboundedSender<RequestMes
     }
 }
 
-fn process_transaction(transaction: Transaction, tx_transactions: UnboundedSender<Transaction>) {
+fn process_transaction(
+    transaction: ForwardedTransaction,
+    tx_transactions: UnboundedSender<ForwardedTransaction>,
+) {
     if let Err(err) = tx_transactions.send(transaction) {
         error!("Failed to enqueue tx: {}", err);
     }
 }
 
 fn process_upstream_message(
+    source: String,
     response: Result<ResponseMessageEnvelope, Status>,
     tx_upstream_transactions: UnboundedSender<RequestMessageEnvelope>,
-    tx_transactions: UnboundedSender<Transaction>,
+    tx_transactions: UnboundedSender<ForwardedTransaction>,
 ) {
     match response {
         Ok(response_message_envelope) => {
@@ -40,7 +45,13 @@ fn process_upstream_message(
                 process_ping(ping, tx_upstream_transactions);
             }
             if let Some(transaction) = response_message_envelope.transaction {
-                process_transaction(transaction, tx_transactions);
+                process_transaction(
+                    ForwardedTransaction {
+                        source: source,
+                        transaction: transaction,
+                    },
+                    tx_transactions,
+                );
             }
         }
         Err(err) => {
@@ -50,8 +61,9 @@ fn process_upstream_message(
 }
 
 async fn mtx_stream(
+    source: String,
     client: &mut MTransactionClient<Channel>,
-    tx_transactions: tokio::sync::mpsc::UnboundedSender<Transaction>,
+    tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
     mut metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
 ) {
     let (tx_upstream_transactions, mut rx_upstream_transactions) =
@@ -81,7 +93,7 @@ async fn mtx_stream(
 
             response = response_stream.next() => {
                 if let Some(response) = response {
-                    process_upstream_message(response, tx_upstream_transactions.clone(), tx_transactions.clone());
+                    process_upstream_message(source.clone(), response, tx_upstream_transactions.clone(), tx_transactions.clone());
                 } else {
                     metrics.close();
                     error!("Upstream closed!");
@@ -127,25 +139,32 @@ pub async fn spawn_grpc_client(
     tls_grpc_ca_cert: Option<String>,
     tls_grpc_client_key: Option<String>,
     tls_grpc_client_cert: Option<String>,
-    tx_transactions: tokio::sync::mpsc::UnboundedSender<Transaction>,
+    tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
     metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;
     let domain_name = grpc_url.host();
 
-
     info!("Opening the gRPC channel: {:?}", grpc_url.host());
     let channel = match tls {
-        Some(tls) => Channel::builder(grpc_url.clone()).tls_config(tls.domain_name(domain_name.unwrap_or("localhost")))?,
+        Some(tls) => Channel::builder(grpc_url.clone())
+            .tls_config(tls.domain_name(domain_name.unwrap_or("localhost")))?,
         _ => Channel::builder(grpc_url.clone()),
     }
     .connect()
     .await?;
 
-    info!("Streaming from gRPC server: {:?}", grpc_url.host());
+    let grpc_host = grpc_url.host();
+    info!("Streaming from gRPC server: {:?}", grpc_host);
     let mut client = MTransactionClient::new(channel);
-    mtx_stream(&mut client, tx_transactions, metrics).await;
+    mtx_stream(
+        grpc_host.unwrap_or("unknown").to_string(),
+        &mut client,
+        tx_transactions,
+        metrics,
+    )
+    .await;
 
     Ok(())
 }

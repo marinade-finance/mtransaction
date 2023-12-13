@@ -15,16 +15,25 @@ enum TransactionForwarder {
     Blackhole(BlackholeForwarder),
 }
 
+pub struct ForwardedTransaction {
+    pub source: String,
+    pub transaction: Transaction,
+}
+
 #[enum_dispatch(TransactionForwarder)]
 pub trait Forwarder {
-    fn process(&self, transaction: Transaction) -> ();
+    fn process(&self, source: String, transaction: Transaction) -> ();
 }
 
 struct BlackholeForwarder {}
 impl Forwarder for BlackholeForwarder {
-    fn process(&self, transaction: Transaction) {
-        metrics::TX_RECEIVED_COUNT.inc();
-        metrics::TX_FORWARD_SUCCEEDED_COUNT.inc();
+    fn process(&self, source: String, transaction: Transaction) {
+        metrics::TX_RECEIVED_COUNT
+            .with_label_values(&[source.as_str()])
+            .inc();
+        metrics::TX_FORWARD_SUCCEEDED_COUNT
+            .with_label_values(&[source.as_str()])
+            .inc();
         info!(
             "Tx {} -> blackhole ({:?})",
             transaction.signature, transaction.tpu
@@ -38,7 +47,7 @@ pub fn spawn_forwarder(
     rpc_url: Option<String>,
     blackhole: bool,
     throttle_parallel: usize,
-) -> UnboundedSender<Transaction> {
+) -> UnboundedSender<ForwardedTransaction> {
     let forwarder = if blackhole {
         warn!("Blackholing all transactions!");
         TransactionForwarder::Blackhole(BlackholeForwarder {})
@@ -52,11 +61,11 @@ pub fn spawn_forwarder(
     };
 
     let (tx_transactions, mut rx_transactions) =
-        tokio::sync::mpsc::unbounded_channel::<Transaction>();
+        tokio::sync::mpsc::unbounded_channel::<ForwardedTransaction>();
 
     tokio::spawn(async move {
         while let Some(transaction) = rx_transactions.recv().await {
-            forwarder.process(transaction);
+            forwarder.process(transaction.source, transaction.transaction);
         }
     });
 

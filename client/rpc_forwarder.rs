@@ -29,8 +29,10 @@ impl RpcForwarder {
 }
 
 impl Forwarder for RpcForwarder {
-    fn process(&self, transaction: Transaction) {
-        metrics::TX_RECEIVED_COUNT.inc();
+    fn process(&self, source: String, transaction: Transaction) {
+        metrics::TX_RECEIVED_COUNT
+            .with_label_values(&[source.as_str()])
+            .inc();
         let rpc_client = self.rpc_client.clone();
         let throttle_parallel = self.throttle_parallel.clone();
         tokio::spawn(async move {
@@ -52,7 +54,9 @@ impl Forwarder for RpcForwarder {
                 .await
             {
                 Ok(_) => {
-                    metrics::TX_FORWARD_SUCCEEDED_COUNT.inc();
+                    metrics::TX_FORWARD_SUCCEEDED_COUNT
+                        .with_label_values(&[source.as_str()])
+                        .inc();
                 }
                 Err(err) => {
                     if let ClientErrorKind::RpcError(RpcError::RpcResponseError {
@@ -68,7 +72,9 @@ impl Forwarder for RpcForwarder {
                     } else {
                         error!("Failed to send the transaction: {}", err);
                     }
-                    metrics::TX_FORWARD_FAILED_COUNT.inc();
+                    metrics::TX_FORWARD_FAILED_COUNT
+                        .with_label_values(&[source.as_str()])
+                        .inc();
                 }
             };
             drop(throttle_permit);
