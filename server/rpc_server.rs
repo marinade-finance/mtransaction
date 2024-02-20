@@ -148,6 +148,19 @@ impl Rpc for RpcServer {
     }
 
     fn get_health(&self) -> Result<()> {
+        // TODO: check total connected stake?
+        // Would need to make the balancer an Arc?
+        // let total_connected_stake = self.balancer.read().await.total_connected_stake;
+        let tx_consumers = metrics::SERVER_TOTAL_CONNECTED_TX_CONSUMERS.get();
+
+        if tx_consumers == 0 {
+            return Err(jsonrpc_core::error::Error {
+                code: jsonrpc_core::error::ErrorCode::ServerError(503),
+                message: "No connected tx consumers".into(),
+                data: None,
+            });
+        }
+
         Ok(())
     }
 }
