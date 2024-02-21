@@ -1,8 +1,8 @@
 use lazy_static::lazy_static;
 use log::{info, warn};
 use prometheus::{
-    register_histogram_vec, register_int_counter, register_int_gauge_vec, Encoder, HistogramVec,
-    IntCounter, IntGaugeVec, TextEncoder,
+    register_histogram_vec, register_int_counter, register_int_gauge, register_int_gauge_vec,
+    Encoder, HistogramVec, IntCounter, IntGauge, IntGaugeVec, TextEncoder,
 };
 use warp::Filter;
 
@@ -84,6 +84,12 @@ lazy_static! {
         &["identity"]
     )
     .unwrap();
+    pub static ref SERVER_TOTAL_CONNECTED_TX_CONSUMERS: IntGauge = register_int_gauge!(
+        "mtx_server_total_connected_tx_consumers",
+        "Total amount of TX consumers to MTX server"
+    )
+    .unwrap();
+
 }
 
 pub fn reset_client_metrics(identity: &String) {
