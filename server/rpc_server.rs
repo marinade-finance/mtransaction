@@ -209,27 +209,33 @@ pub fn spawn_rpc_server(
         move |req: &hyper::Request<hyper::Body>| {
             // If we are using authentication, then check the auth header
             // Otherwise just pass along allow and forward transactions
-            if let Some(public_key) = public_key.clone() {
-                let auth_header = req
+            let auth_header = req
                     .headers()
                     .get(AUTHORIZATION)
                     .map(|header_value| header_value.to_str().unwrap().to_string());
 
+
+            let (auth, mode) = if let Some(public_key) = public_key.clone() {
                 let auth =
                     authenticate((*public_key).clone(), auth_header).map_err(|err| err.to_string());
-                RpcMetadata {
-                    auth: auth.clone(),
-                    balancer: balancer.clone(),
-                    tx_signatures: tx_signatures.clone(),
-                    mode: select_mode(auth.clone().ok(), partners.clone()),
-                }
+
+                (
+                    auth.clone(),
+                    select_mode(auth.clone().ok(), partners.clone()),
+                )
             } else {
-                RpcMetadata {
-                    auth: Ok(Auth::Allow(String::from("internal"))),
-                    balancer: balancer.clone(),
-                    tx_signatures: tx_signatures.clone(),
-                    mode: Mode::FORWARD,
-                }
+                // In this mode, we trust whatever the end user puts in the Authorization header
+                // This assumes that the end user is well known
+                let from = auth_header.unwrap_or_else(|| String::from("unknown"));
+
+                (Ok(Auth::Allow(from)), Mode::FORWARD)
+            };
+
+            RpcMetadata {
+                auth,
+                balancer: balancer.clone(),
+                tx_signatures: tx_signatures.clone(),
+                mode,
             }
         },
     )
