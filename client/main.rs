@@ -4,13 +4,18 @@ pub mod metrics;
 pub mod quic_forwarder;
 pub mod rpc_forwarder;
 
+use std::{net::IpAddr, time::Duration};
+
 use crate::forwarder::spawn_forwarder;
 use crate::grpc_client::spawn_grpc_client;
 use env_logger::Env;
+use forwarder::ForwardedTransaction;
 use futures::TryFutureExt;
+use jsonrpc_core::params;
 use log::{error, info};
-use solana_sdk::signature::read_keypair_file;
+use solana_sdk::signature::{read_keypair_file, Keypair};
 use structopt::StructOpt;
+use tokio::{sync::mpsc::UnboundedSender, time::sleep};
 use tonic::transport::Uri;
 
 pub const VERSION: &str = "rust-0.0.7-beta";
@@ -77,6 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter_mut()
         .map(|grpc_url| {
             let grpc_parsed_url: Uri = grpc_url.parse().unwrap();
+
             tokio::spawn(
                 spawn_grpc_client(
                     grpc_parsed_url.clone(),
@@ -86,7 +92,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tx_transactions.clone(),
                     metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string()),
                 )
-                .map_err(|err| error!("gRPC client failed: {}", err)),
+                .unwrap_or_else(move |_e| {
+                    info!("spawn failed, retrying...");
+                    spwan_th_retries(
+                        grpc_parsed_url.clone(),
+                        Some(identity.unwrap()),
+                        tpu_addr.clone(),
+                    );
+                }), // .map_err(|err| error!("gRPC client failed: {}", err)),
             )
         })
         .collect();
@@ -95,4 +108,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Service stopped.");
     Ok(())
+}
+
+fn spwan_th_retries(grpc_parsed_url: Uri, identity: Option<Keypair>, tpu_addr: Option<IpAddr>) {
+    for i in 1..3 {
+        info!(
+            "Retrying...{} {} times",
+            grpc_parsed_url.clone().to_string(),
+            i
+        );
+        let params = Params::from_args();
+
+        let tx_transactions = spawn_forwarder(
+            identity,
+            tpu_addr,
+            params.rpc_url,
+            params.blackhole,
+            params.throttle_parallel,
+        );
+
+        tokio::spawn(
+            spawn_grpc_client(
+                grpc_parsed_url.clone(),
+                params.tls_grpc_ca_cert.clone(),
+                params.tls_grpc_client_key.clone(),
+                params.tls_grpc_client_cert.clone(),
+                tx_transactions.clone(),
+                metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string()),
+            )
+            .unwrap_or_else(move |_e| {}),
+        );
+    }
 }
