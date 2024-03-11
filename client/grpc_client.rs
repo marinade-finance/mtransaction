@@ -64,7 +64,7 @@ async fn mtx_stream(
     source: String,
     client: &mut MTransactionClient<Channel>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
-    mut metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
+    metrics: &mut tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
 ) {
     let (tx_upstream_transactions, mut rx_upstream_transactions) =
         tokio::sync::mpsc::unbounded_channel::<RequestMessageEnvelope>();
@@ -140,7 +140,7 @@ pub async fn spawn_grpc_client(
     tls_grpc_client_key: Option<String>,
     tls_grpc_client_cert: Option<String>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
-    metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
+    metrics: &mut tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;
