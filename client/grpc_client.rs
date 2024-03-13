@@ -65,7 +65,7 @@ async fn mtx_stream(
     client: &mut MTransactionClient<Channel>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
     metrics: &mut tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
-) {
+) -> std::result::Result<(), Box<dyn std::error::Error>>  {
     let (tx_upstream_transactions, mut rx_upstream_transactions) =
         tokio::sync::mpsc::unbounded_channel::<RequestMessageEnvelope>();
     let request_stream = async_stream::stream! {
@@ -97,11 +97,13 @@ async fn mtx_stream(
                 } else {
                     metrics.close();
                     error!("Upstream closed!");
-                    break
+                    // break
+                    return Err("Upstream closed!".into());
                 }
             }
         }
-    }
+    };
+    return Ok(())
 }
 
 async fn get_tls_config(
@@ -158,13 +160,22 @@ pub async fn spawn_grpc_client(
     let grpc_host = grpc_url.host();
     info!("Streaming from gRPC server: {:?}", grpc_host);
     let mut client = MTransactionClient::new(channel);
-    mtx_stream(
+    let mx = mtx_stream(
         grpc_host.unwrap_or("unknown").to_string(),
         &mut client,
         tx_transactions,
         metrics,
     )
     .await;
+
+    match mx {
+        Ok(_) => {
+            info!("Stream ended successfully");
+        }
+        Err(e) => {
+            return Err(e);
+        }
+    }
 
     Ok(())
 }
