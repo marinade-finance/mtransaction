@@ -65,7 +65,7 @@ async fn mtx_stream(
     client: &mut MTransactionClient<Channel>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
     mut metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
-) {
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (tx_upstream_transactions, mut rx_upstream_transactions) =
         tokio::sync::mpsc::unbounded_channel::<RequestMessageEnvelope>();
     let request_stream = async_stream::stream! {
@@ -83,10 +83,10 @@ async fn mtx_stream(
                 if let Some(metrics) = metrics {
                     info!("Sending metrics: {:?}", metrics);
                     if let Err(err) = tx_upstream_transactions.send(metrics) {
-                        error!("Failed to enqueue metrics: {}", err);
+                        error!("Failed to enqueue metrics, source: {:?} err {}", source, err);
                     }
                 } else {
-                    error!("Stream of metrics dropped!");
+                    error!("Stream of metrics dropped: {:?}", source);
                     break
                 }
             }
@@ -96,12 +96,13 @@ async fn mtx_stream(
                     process_upstream_message(source.clone(), response, tx_upstream_transactions.clone(), tx_transactions.clone());
                 } else {
                     metrics.close();
-                    error!("Upstream closed!");
-                    break
+                    error!("Upstream closed: {:?}", source);
+                    return Err("Upstream closed".into());
                 }
             }
         }
     }
+    Ok(())
 }
 
 async fn get_tls_config(
@@ -144,6 +145,7 @@ pub async fn spawn_grpc_client(
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;
+
     let domain_name = grpc_url.host();
 
     info!("Opening the gRPC channel: {:?}", grpc_url.host());
@@ -156,15 +158,20 @@ pub async fn spawn_grpc_client(
     .await?;
 
     let grpc_host = grpc_url.host();
+
     info!("Streaming from gRPC server: {:?}", grpc_host);
+
     let mut client = MTransactionClient::new(channel);
+
     mtx_stream(
         grpc_host.unwrap_or("unknown").to_string(),
         &mut client,
         tx_transactions,
         metrics,
     )
-    .await;
-
-    Ok(())
+    .await
+    .map(|v| {
+      info!("Stream ended from gRPC server: {:?}, {:?}", grpc_host, v);
+      v
+    })
 }

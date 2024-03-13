@@ -7,13 +7,20 @@ pub mod rpc_forwarder;
 use crate::forwarder::spawn_forwarder;
 use crate::grpc_client::spawn_grpc_client;
 use env_logger::Env;
-use futures::TryFutureExt;
+use forwarder::ForwardedTransaction;
 use log::{error, info};
 use solana_sdk::signature::read_keypair_file;
 use structopt::StructOpt;
+use tokio::{
+    sync::mpsc::UnboundedSender,
+    time::{sleep, Duration},
+};
 use tonic::transport::Uri;
 
 pub const VERSION: &str = "rust-0.0.7-beta";
+
+const MAX_GRPC_RECONNECT_RETRIES: u32 = 5;
+const GRPC_RECONNECT_DELAY: u64 = 1_000;
 
 #[derive(Debug, StructOpt)]
 struct Params {
@@ -77,17 +84,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter_mut()
         .map(|grpc_url| {
             let grpc_parsed_url: Uri = grpc_url.parse().unwrap();
-            tokio::spawn(
-                spawn_grpc_client(
-                    grpc_parsed_url.clone(),
-                    params.tls_grpc_ca_cert.clone(),
-                    params.tls_grpc_client_key.clone(),
-                    params.tls_grpc_client_cert.clone(),
-                    tx_transactions.clone(),
-                    metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string()),
-                )
-                .map_err(|err| error!("gRPC client failed: {}", err)),
-            )
+
+            let tls_grpc_ca_cert = params.tls_grpc_ca_cert.clone();
+            let tls_grpc_client_key = params.tls_grpc_client_key.clone();
+            let tls_grpc_client_cert = params.tls_grpc_client_cert.clone();
+            let tx_transactions = tx_transactions.clone();
+
+            tokio::spawn(spawn_grpc_connection_with_retry(
+                grpc_parsed_url.clone(),
+                tls_grpc_ca_cert.clone(),
+                tls_grpc_client_key.clone(),
+                tls_grpc_client_cert.clone(),
+                tx_transactions.clone(),
+            ))
         })
         .collect();
 
@@ -95,4 +104,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Service stopped.");
     Ok(())
+}
+
+async fn spawn_grpc_connection_with_retry(
+    grpc_parsed_url: Uri,
+    tls_grpc_ca_cert: Option<String>,
+    tls_grpc_client_key: Option<String>,
+    tls_grpc_client_cert: Option<String>,
+    tx_transactions: UnboundedSender<ForwardedTransaction>,
+) -> () {
+    for _ in 0..MAX_GRPC_RECONNECT_RETRIES {
+        match spawn_grpc_client(
+            grpc_parsed_url.clone(),
+            tls_grpc_ca_cert.clone(),
+            tls_grpc_client_key.clone(),
+            tls_grpc_client_cert.clone(),
+            tx_transactions.clone(),
+            metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string()),
+        )
+        .await
+        {
+            Ok(_) => {
+                break;
+            }
+            Err(error) => {
+                error!("gRPC client failed: {error}");
+                info!("retrying with a delay of {GRPC_RECONNECT_DELAY} ms");
+            }
+        }
+        sleep(Duration::from_millis(GRPC_RECONNECT_DELAY)).await;
+    }
 }

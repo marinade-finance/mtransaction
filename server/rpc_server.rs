@@ -210,10 +210,9 @@ pub fn spawn_rpc_server(
             // If we are using authentication, then check the auth header
             // Otherwise just pass along allow and forward transactions
             let auth_header = req
-                    .headers()
-                    .get(AUTHORIZATION)
-                    .map(|header_value| header_value.to_str().unwrap().to_string());
-
+                .headers()
+                .get(AUTHORIZATION)
+                .map(|header_value| header_value.to_str().unwrap().to_string());
 
             let (auth, mode) = if let Some(public_key) = public_key.clone() {
                 let auth =
