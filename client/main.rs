@@ -101,7 +101,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tls_grpc_client_cert.clone(),
                 tx_transactions.clone(),
             ))
-        
 
             // tokio::spawn(async move {
             //     // while retry_attempts <= MAX_RETRIES {
@@ -211,8 +210,7 @@ async fn with_retry(
     tls_grpc_client_key: Option<String>,
     tls_grpc_client_cert: Option<String>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
-) ->(){
-    // info!("IN WITH RETRY");
+) -> () {
     let mut feeder = metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string());
     for _ in 0..5 {
         match spawn_grpc_client(
@@ -225,9 +223,10 @@ async fn with_retry(
         )
         .await
         {
-            Ok(_) => {
+            Ok(o) => {
+                info!("{:?}", o);
                 info!("gRPC client succeeded");
-                continue;
+                break;
             }
             Err(error) => {
                 error!("gRPC client failed: {error}");
