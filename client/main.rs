@@ -153,56 +153,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //     block_on(spawn_with_delay(grpc_parsed_url, tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert, tx_transactions))
 // }
 
-async fn spawn_with_delay(
-    grpc_parsed_url: Uri,
-    tls_grpc_ca_cert: Option<String>,
-    tls_grpc_client_key: Option<String>,
-    tls_grpc_client_cert: Option<String>,
-    tx_transactions: UnboundedSender<ForwardedTransaction>,
-) {
-    info!("IN SPAWN WITH DELAY");
+// async fn spawn_with_delay(
+//     grpc_parsed_url: Uri,
+//     tls_grpc_ca_cert: Option<String>,
+//     tls_grpc_client_key: Option<String>,
+//     tls_grpc_client_cert: Option<String>,
+//     tx_transactions: UnboundedSender<ForwardedTransaction>,
+// ) {
+//     info!("IN SPAWN WITH DELAY");
 
-    let mut feeder = metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string());
+//     let mut feeder = metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string());
 
-    let mut retry_attempts = 0;
-    let _ = tokio::spawn(async move {
-        info!("IN SPAWN WITH DELAY 2");
-        while retry_attempts <= MAX_RETRIES {
-            info!("IN WHILE {retry_attempts}");
-            // if let Err(error) =
-            spawn_grpc_client(
-                grpc_parsed_url.clone(),
-                tls_grpc_ca_cert.clone(),
-                tls_grpc_client_key.clone(),
-                tls_grpc_client_cert.clone(),
-                tx_transactions.clone(),
-                &mut feeder,
-            )
-            .await
-            .map_err(|_e| error!("Retry Failed in spawn"));
-            // {
-            //     error!("gRPC client failed: {error}");
-            // }
-            retry_attempts += 1;
-            info!("retrying with a delay of 1 second. Retry attempt: {retry_attempts}");
-            sleep(Duration::from_millis(1_000)).await;
-        }
-    });
+//     let mut retry_attempts = 0;
+//     let _ = tokio::spawn(async move {
+//         info!("IN SPAWN WITH DELAY 2");
+//         while retry_attempts <= MAX_RETRIES {
+//             info!("IN WHILE {retry_attempts}");
+//             // if let Err(error) =
+//             spawn_grpc_client(
+//                 grpc_parsed_url.clone(),
+//                 tls_grpc_ca_cert.clone(),
+//                 tls_grpc_client_key.clone(),
+//                 tls_grpc_client_cert.clone(),
+//                 tx_transactions.clone(),
+//                 &mut feeder,
+//             )
+//             .await
+//             .map_err(|_e| error!("Retry Failed in spawn"));
+//             // {
+//             //     error!("gRPC client failed: {error}");
+//             // }
+//             retry_attempts += 1;
+//             info!("retrying with a delay of 1 second. Retry attempt: {retry_attempts}");
+//             sleep(Duration::from_millis(1_000)).await;
+//         }
+//     });
 
-    // let _ = spawn_grpc_client(
-    //     grpc_parsed_url.clone(),
-    //     tls_grpc_ca_cert.clone(),
-    //     tls_grpc_client_key.clone(),
-    //     tls_grpc_client_cert.clone(),
-    //     tx_transactions.clone(),
-    //     &mut feeder,
-    // )
-    // .await
-    // .map_err(|_e| error!("Retry Failed in spawn"));
-    info!("BELOW");
+//     // let _ = spawn_grpc_client(
+//     //     grpc_parsed_url.clone(),
+//     //     tls_grpc_ca_cert.clone(),
+//     //     tls_grpc_client_key.clone(),
+//     //     tls_grpc_client_cert.clone(),
+//     //     tx_transactions.clone(),
+//     //     &mut feeder,
+//     // )
+//     // .await
+//     // .map_err(|_e| error!("Retry Failed in spawn"));
+//     info!("BELOW");
 
-    return;
-}
+//     return;
+// }
 
 async fn with_retry(
     grpc_parsed_url: Uri,
@@ -211,7 +211,8 @@ async fn with_retry(
     tls_grpc_client_cert: Option<String>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
 ) -> () {
-    let mut feeder = metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string());
+    // let mut feeder = metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string());
+
     for _ in 0..5 {
         match spawn_grpc_client(
             grpc_parsed_url.clone(),
@@ -219,7 +220,7 @@ async fn with_retry(
             tls_grpc_client_key.clone(),
             tls_grpc_client_cert.clone(),
             tx_transactions.clone(),
-            &mut feeder,
+            metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string()),
         )
         .await
         {
@@ -234,5 +235,5 @@ async fn with_retry(
             }
         }
         sleep(Duration::from_millis(1_000)).await;
-    };
+    }
 }
