@@ -19,8 +19,10 @@ use tonic::transport::Uri;
 
 pub const VERSION: &str = "rust-0.0.7-beta";
 
-const MAX_GRPC_RECONNECT_RETRIES: u32 = 5;
+// Linearly delay retries up to 60 seconds
 const GRPC_RECONNECT_DELAY: u64 = 1_000;
+const GRPC_RECONNECT_MAX_DELAY: u64 = 60_000;
+
 
 #[derive(Debug, StructOpt)]
 struct Params {
@@ -113,8 +115,9 @@ async fn spawn_grpc_connection_with_retry(
     tls_grpc_client_cert: Option<String>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
 ) -> () {
-    for _ in 0..MAX_GRPC_RECONNECT_RETRIES {
-        match spawn_grpc_client(
+    let mut retry = 0;
+    loop {
+        let retry_delay = match spawn_grpc_client(
             grpc_parsed_url.clone(),
             tls_grpc_ca_cert.clone(),
             tls_grpc_client_key.clone(),
@@ -129,9 +132,13 @@ async fn spawn_grpc_connection_with_retry(
             }
             Err(error) => {
                 error!("gRPC client failed: {error}");
-                info!("retrying with a delay of {GRPC_RECONNECT_DELAY} ms");
+                retry += 1;
+
+                // Bound the max retry by GRPC_RECONNECT_MAX_DELAY
+                GRPC_RECONNECT_MAX_DELAY.min(GRPC_RECONNECT_DELAY * retry)
             }
-        }
-        sleep(Duration::from_millis(GRPC_RECONNECT_DELAY)).await;
+        };
+        info!("retrying {retry} time with a delay of {retry_delay} ms");
+        sleep(Duration::from_millis(retry_delay)).await;
     }
 }
