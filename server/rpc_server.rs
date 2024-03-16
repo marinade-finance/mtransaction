@@ -41,6 +41,8 @@ impl Metadata for RpcMetadata {}
 #[serde(rename_all = "camelCase")]
 pub struct SendPriorityTransactionConfig {}
 
+pub type SendTransactionConfig = SendPriorityTransactionConfig;
+
 #[rpc]
 pub trait Rpc {
     type Metadata;
@@ -51,6 +53,14 @@ pub trait Rpc {
         meta: Self::Metadata,
         data: String,
         config: Option<SendPriorityTransactionConfig>,
+    ) -> BoxFuture<Result<String>>;
+
+    #[rpc(meta, name = "sendTransaction")]
+    fn send_transaction(
+        &self,
+        meta: Self::Metadata,
+        data: String,
+        config: Option<SendTransactionConfig>,
     ) -> BoxFuture<Result<String>>;
 
     #[rpc(name = "getHealth")]
@@ -146,6 +156,18 @@ impl Rpc for RpcServer {
             }
         })
     }
+
+
+    fn send_transaction(
+        &self,
+        meta: Self::Metadata,
+        data: String,
+        config: Option<SendTransactionConfig>,
+    ) -> BoxFuture<Result<String>> {
+        self.send_priority_transaction(meta, data, config)
+    }
+
+
 
     fn get_health(&self) -> Result<()> {
         // TODO: check total connected stake?
