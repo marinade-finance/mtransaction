@@ -39,7 +39,9 @@ impl Metadata for RpcMetadata {}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SendPriorityTransactionConfig {}
+pub struct SendPriorityTransactionConfig {
+    skip_preflight: Option<bool>,
+}
 
 pub type SendTransactionConfig = SendPriorityTransactionConfig;
 
@@ -76,7 +78,7 @@ impl Rpc for RpcServer {
         &self,
         meta: Self::Metadata,
         data: String,
-        _config: Option<SendPriorityTransactionConfig>,
+        config: Option<SendPriorityTransactionConfig>,
     ) -> BoxFuture<Result<String>> {
         let auth = match meta.auth {
             Ok(auth) => auth,
@@ -91,6 +93,42 @@ impl Rpc for RpcServer {
                 });
             }
         };
+
+        match config {
+            Some(config) => match config.skip_preflight {
+                Some(skip_preflight) => {
+                    if !skip_preflight {
+                        return Box::pin(async move {
+                            Err(jsonrpc_core::error::Error {
+                                code: jsonrpc_core::error::ErrorCode::InvalidParams,
+                                message: "skipPreflight must be true".into(),
+                                data: None,
+                            })
+                        });
+                    }
+
+                    info!("Skipping preflight checks");
+                }
+                None => {
+                    return Box::pin(async move {
+                        Err(jsonrpc_core::error::Error {
+                            code: jsonrpc_core::error::ErrorCode::InvalidParams,
+                            message: "skipPreflight is mandatory".into(),
+                            data: None,
+                        })
+                    });
+                }
+            },
+            None => {
+                return Box::pin(async move {
+                    Err(jsonrpc_core::error::Error {
+                        code: jsonrpc_core::error::ErrorCode::InvalidParams,
+                        message: "config options are mandatory".into(),
+                        data: None,
+                    })
+                });
+            }
+        }
 
         info!("RPC method sendPriorityTransaction called: {:?}", auth);
         metrics::SERVER_RPC_TX_ACCEPTED
@@ -157,7 +195,6 @@ impl Rpc for RpcServer {
         })
     }
 
-
     fn send_transaction(
         &self,
         meta: Self::Metadata,
@@ -166,8 +203,6 @@ impl Rpc for RpcServer {
     ) -> BoxFuture<Result<String>> {
         self.send_priority_transaction(meta, data, config)
     }
-
-
 
     fn get_health(&self) -> Result<()> {
         // TODO: check total connected stake?
