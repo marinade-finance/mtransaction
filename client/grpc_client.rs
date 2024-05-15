@@ -125,6 +125,7 @@ async fn get_tls_config(
         Some(
             ClientTlsConfig::new()
                 .ca_certificate(ca_cert)
+                .domain_name("localhost")
                 .identity(client_identity),
         )
     } else {
@@ -150,8 +151,7 @@ pub async fn spawn_grpc_client(
 
     info!("Opening the gRPC channel: {:?}", grpc_url.host());
     let channel = match tls {
-        Some(tls) => Channel::builder(grpc_url.clone())
-            .tls_config(tls.domain_name(domain_name.unwrap_or("localhost")))?,
+        Some(tls) => Channel::builder(grpc_url.clone()).tls_config(tls)?,
         _ => Channel::builder(grpc_url.clone()),
     }
     .connect()
