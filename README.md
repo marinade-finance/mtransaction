@@ -109,7 +109,7 @@ If you are interested in trying this service, reach out to us on discord.
 ```bash
 curl RPC_URL -X POST -H "Content-Type: application/json" -H "Authorization: Bearer ***" -d '{
   "jsonrpc": "2.0",
-  "method": "sendPriorityTransaction",
+  "method": "sendTransaction",
   "id": 1,
   "params": [
     "ARshF1FLgiVW50Ni22v0MvVwbG+lzVF3Lny0RXdel49BaJ+h7CD3SsAA2611yJgrzywPPoH61NqEVnEamW8d2ggBAAEDB0RIKu9gtXbw72njHgZGjO2GvCj5asjUDjoWRvAjtgVSd+bmVQdeIet9vYadHhwEFFONs9iJcGGojpal6ubMaQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0zi3p2jurWfGuUPD/3Ny0mYgNYCpRQhozRYVCJdLYzkBAgIAAQwCAAAARQAAAAAAAAA=",
