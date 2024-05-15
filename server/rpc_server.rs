@@ -39,7 +39,11 @@ impl Metadata for RpcMetadata {}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SendPriorityTransactionConfig {}
+pub struct SendPriorityTransactionConfig {
+    skip_preflight: Option<bool>,
+}
+
+pub type SendTransactionConfig = SendPriorityTransactionConfig;
 
 #[rpc]
 pub trait Rpc {
@@ -51,6 +55,14 @@ pub trait Rpc {
         meta: Self::Metadata,
         data: String,
         config: Option<SendPriorityTransactionConfig>,
+    ) -> BoxFuture<Result<String>>;
+
+    #[rpc(meta, name = "sendTransaction")]
+    fn send_transaction(
+        &self,
+        meta: Self::Metadata,
+        data: String,
+        config: Option<SendTransactionConfig>,
     ) -> BoxFuture<Result<String>>;
 
     #[rpc(name = "getHealth")]
@@ -66,7 +78,7 @@ impl Rpc for RpcServer {
         &self,
         meta: Self::Metadata,
         data: String,
-        _config: Option<SendPriorityTransactionConfig>,
+        config: Option<SendPriorityTransactionConfig>,
     ) -> BoxFuture<Result<String>> {
         let auth = match meta.auth {
             Ok(auth) => auth,
@@ -81,6 +93,42 @@ impl Rpc for RpcServer {
                 });
             }
         };
+
+        match config {
+            Some(config) => match config.skip_preflight {
+                Some(skip_preflight) => {
+                    if !skip_preflight {
+                        return Box::pin(async move {
+                            Err(jsonrpc_core::error::Error {
+                                code: jsonrpc_core::error::ErrorCode::InvalidParams,
+                                message: "skipPreflight must be true".into(),
+                                data: None,
+                            })
+                        });
+                    }
+
+                    info!("Skipping preflight checks");
+                }
+                None => {
+                    return Box::pin(async move {
+                        Err(jsonrpc_core::error::Error {
+                            code: jsonrpc_core::error::ErrorCode::InvalidParams,
+                            message: "skipPreflight is mandatory".into(),
+                            data: None,
+                        })
+                    });
+                }
+            },
+            None => {
+                return Box::pin(async move {
+                    Err(jsonrpc_core::error::Error {
+                        code: jsonrpc_core::error::ErrorCode::InvalidParams,
+                        message: "config options are mandatory".into(),
+                        data: None,
+                    })
+                });
+            }
+        }
 
         info!("RPC method sendPriorityTransaction called: {:?}", auth);
         metrics::SERVER_RPC_TX_ACCEPTED
@@ -147,8 +195,30 @@ impl Rpc for RpcServer {
         })
     }
 
+    fn send_transaction(
+        &self,
+        meta: Self::Metadata,
+        data: String,
+        config: Option<SendTransactionConfig>,
+    ) -> BoxFuture<Result<String>> {
+        self.send_priority_transaction(meta, data, config)
+    }
+
     fn get_health(&self) -> Result<()> {
-        Ok(())
+        // TODO: check total connected stake?
+        // Would need to make the balancer an Arc?
+        // let total_connected_stake = self.balancer.read().await.total_connected_stake;
+        let tx_consumers = metrics::SERVER_TOTAL_CONNECTED_TX_CONSUMERS.get();
+
+        if tx_consumers == 0 {
+            Err(jsonrpc_core::error::Error {
+                code: jsonrpc_core::error::ErrorCode::ServerError(503),
+                message: "No connected tx consumers".into(),
+                data: None,
+            })
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -163,6 +233,7 @@ fn select_mode(auth: Option<Auth>, partners: Vec<String>) -> Mode {
     let mut mode = Mode::FORWARD;
 
     if let Some(auth) = auth {
+        // If this is from a partner randomly blackhole based on rng?
         if partners.contains(&auth.to_string()) {
             let mut rng = rand::thread_rng();
             if rng.gen::<bool>() {
@@ -175,33 +246,52 @@ fn select_mode(auth: Option<Auth>, partners: Vec<String>) -> Mode {
 
 pub fn spawn_rpc_server(
     rpc_addr: std::net::SocketAddr,
-    jwt_public_key_path: String,
+    jwt_public_key_path: Option<String>,
     test_partners: Option<Vec<String>>,
     balancer: Arc<RwLock<Balancer>>,
     tx_signatures: UnboundedSender<SignatureWrapper>,
 ) -> Server {
     info!("Spawning RPC server.");
-    let public_key = Arc::new(
-        load_public_key(jwt_public_key_path)
-            .expect("Failed to load public key used to verify JWTs"),
-    );
+
+    let public_key = jwt_public_key_path.map(|jwt_public_key_path| {
+        Arc::new(
+            load_public_key(jwt_public_key_path)
+                .expect("Failed to load public key used to verify JWTs"),
+        )
+    });
     let partners = test_partners.unwrap_or_default();
 
     ServerBuilder::with_meta_extractor(
         get_io_handler(),
         move |req: &hyper::Request<hyper::Body>| {
+            // If we are using authentication, then check the auth header
+            // Otherwise just pass along allow and forward transactions
             let auth_header = req
                 .headers()
                 .get(AUTHORIZATION)
                 .map(|header_value| header_value.to_str().unwrap().to_string());
-            let auth =
-                authenticate((*public_key).clone(), auth_header).map_err(|err| err.to_string());
+
+            let (auth, mode) = if let Some(public_key) = public_key.clone() {
+                let auth =
+                    authenticate((*public_key).clone(), auth_header).map_err(|err| err.to_string());
+
+                (
+                    auth.clone(),
+                    select_mode(auth.clone().ok(), partners.clone()),
+                )
+            } else {
+                // In this mode, we trust whatever the end user puts in the Authorization header
+                // This assumes that the end user is well known
+                let from = auth_header.unwrap_or_else(|| String::from("unknown"));
+
+                (Ok(Auth::Allow(from)), Mode::FORWARD)
+            };
 
             RpcMetadata {
-                auth: auth.clone(),
+                auth,
                 balancer: balancer.clone(),
                 tx_signatures: tx_signatures.clone(),
-                mode: select_mode(auth.clone().ok(), partners.clone()),
+                mode,
             }
         },
     )

@@ -133,6 +133,8 @@ impl Balancer {
     }
 
     pub fn recalc_total_connected_stake(&mut self) {
+        metrics::SERVER_TOTAL_CONNECTED_TX_CONSUMERS.set(self.tx_consumers.len() as i64);
+
         for tx_consumer in self.tx_consumers.values() {
             metrics::SERVER_TOTAL_CONNECTED_STAKE
                 .with_label_values(&[&tx_consumer.identity])

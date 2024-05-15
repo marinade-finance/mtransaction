@@ -61,7 +61,7 @@ struct Params {
     stake_override_sol: Vec<u64>,
 
     #[structopt(long = "jwt-public-key")]
-    jwt_public_key: String,
+    jwt_public_key: Option<String>,
 }
 
 #[tokio::main]

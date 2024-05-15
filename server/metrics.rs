@@ -1,8 +1,8 @@
 use lazy_static::lazy_static;
 use log::{info, warn};
 use prometheus::{
-    register_histogram_vec, register_int_counter, register_int_gauge_vec, Encoder, HistogramVec,
-    IntCounter, IntGaugeVec, TextEncoder,
+    register_histogram_vec, register_int_counter, register_int_gauge, register_int_gauge_vec,
+    Encoder, HistogramVec, IntCounter, IntGauge, IntGaugeVec, TextEncoder,
 };
 use warp::Filter;
 
@@ -84,6 +84,12 @@ lazy_static! {
         &["identity"]
     )
     .unwrap();
+    pub static ref SERVER_TOTAL_CONNECTED_TX_CONSUMERS: IntGauge = register_int_gauge!(
+        "mtx_server_total_connected_tx_consumers",
+        "Total amount of TX consumers to MTX server"
+    )
+    .unwrap();
+
 }
 
 pub fn reset_client_metrics(identity: &String) {
@@ -103,12 +109,18 @@ pub fn reset_client_metrics(identity: &String) {
 
 pub fn spawn(metrics_addr: std::net::SocketAddr) {
     tokio::spawn(async move {
+        init_metrics();
         let metrics_route = warp::path!("metrics")
             .and(warp::get())
             .map(|| metrics_handler());
         info!("Spawning metrics server");
         warp::serve(metrics_route).run(metrics_addr).await;
     });
+}
+
+fn init_metrics() {
+    // Set the TX consumers to 0 so that we can get some metrics when the node doesn't have any connected stake
+    SERVER_TOTAL_CONNECTED_TX_CONSUMERS.set(0);
 }
 
 fn metrics_handler() -> String {
