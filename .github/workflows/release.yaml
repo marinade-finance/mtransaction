@@ -22,13 +22,13 @@ jobs:
           command: build
           args: --release
       - name: Archive mtx-server
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: mtx-server
           path: |
             target/release/mtx-server
       - name: Archive mtx-client
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: mtx-client
           path: |
@@ -50,13 +50,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Get mtx-server artifact
         id: mtx_server_artifact
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: mtx-server
           path: .
       - name: Get mtx-client artifact
         id: mtx_client_artifact
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@v4
         with:
           name: mtx-client
           path: .
