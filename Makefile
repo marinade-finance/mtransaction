@@ -38,6 +38,7 @@ run-server: build-server
 run-client-local: build-client
 	cargo run --bin mtx-client -- \
 		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--grpc-urls-file       ./client-config.yaml \
 		--tls-grpc-client-key  ./certs/client.$(client).key \
 		--tls-grpc-client-cert ./certs/client.$(client).cert \
 		--rpc-url              http://127.0.0.1:8899
