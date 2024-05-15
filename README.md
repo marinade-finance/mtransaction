@@ -49,7 +49,7 @@ cd mtransaction
 # sudo cp ./target/release/mtx-client /usr/local/bin/mtx-client
 
 # If you do not want to build `mtx-client` yourself, download it
-sudo curl -LSfs 'https://github.com/marinade-finance/mtransaction/releases/download/v0.0.10-beta/mtx-client' -o /usr/local/bin/mtx-client
+sudo curl -LSfs 'https://github.com/marinade-finance/mtransaction/releases/download/v0.0.11-beta/mtx-client' -o /usr/local/bin/mtx-client
 sudo chmod +x /usr/local/bin/mtx-client
 
 # Generate certificate used by `mtx-client` to connect to `mtx-server`
