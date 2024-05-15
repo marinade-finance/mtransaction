@@ -44,7 +44,7 @@ then
       exit 1
   fi
 
-  openssl x509 -req -in "$CERTS/client.req" -days 60 -CA "$CERTS/ca.cert" -CAkey "$CERTS/ca.key" -CAcreateserial -out "$CERTS/client.$VALIDATOR.cert" -extfile "$CERTS/openssl.client.conf"
+  openssl x509 -req -in "$CERTS/client.req" -days 3650 -CA "$CERTS/ca.cert" -CAkey "$CERTS/ca.key" -CAcreateserial -out "$CERTS/client.$VALIDATOR.cert" -extfile "$CERTS/openssl.client.conf"
   cat "$CERTS/client.$VALIDATOR.cert"
 else
   echo "Usage: $0 <req|sign> ..."

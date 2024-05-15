@@ -10,7 +10,7 @@ CMD="$1"
 
 if [[ $CMD == "ca" ]]
 then
-  openssl req -x509 -newkey rsa:4096 -days 3650 -nodes -keyout "$CERTS/ca.key" -out "$CERTS/ca.cert" -subj "/CN=Triton One"
+  openssl req -x509 -newkey rsa:4096 -days 3650 -nodes -keyout "$CERTS/ca.key" -out "$CERTS/ca.cert" -subj "/CN=Marinade"
 elif [[ $CMD == "sign" ]]
 then
   HOST="$2"
