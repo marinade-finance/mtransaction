@@ -7,7 +7,8 @@ help:
 	@echo "    image           builds $(name) docker image"
 	@echo "    help            show this help"
 
-.PHONY: build-all build-server build-server-release run-server clean run-client run-client-local run-client-rpc-devnet run-client-rpc-mainnet run-client-blackhole
+.PHONY: help build-all build-client build-server build-server-release run-server clean run-client run-client-local run-client-rpc-devnet run-client-rpc-mainnet run-client-blackhole
+
 .DEFAULT_GOAL := build-all
 
 CERT_DIR = certs
@@ -60,11 +61,6 @@ run-server-local: build-server
 		--tls-grpc-ca-cert        ./certs/ca.cert \
 
 run-client: build-client
-	cargo run --bin mtx-client -- \
-		--tls-grpc-ca-cert     ./certs/ca.cert \
-		--grpc-urls-file       ./client.yml \
-		--tls-grpc-client-key  ./certs/client.$(client).key \
-		--tls-grpc-client-cert ./certs/client.$(client).cert \
 
 run-client-rpc-devnet: build-client
 	cargo run --bin mtx-client -- \
