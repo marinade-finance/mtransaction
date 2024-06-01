@@ -1,6 +1,7 @@
 use crate::grpc_server::{self, build_tx_message_envelope};
 use crate::metrics;
 use crate::solana_service::{get_tpu_by_identity, leaders_stream};
+use crate::{N_CONSUMERS, N_COPIES, NODES_REFRESH_SECONDS};
 use jsonrpc_http_server::*;
 use log::{error, info};
 use rand::rngs::StdRng;
@@ -32,6 +33,7 @@ impl Drop for TxConsumer {
     }
 }
 
+#[derive(Default)]
 pub struct Balancer {
     pub tx_consumers: HashMap<String, TxConsumer>,
     pub stake_weights: HashMap<String, u64>,
@@ -41,16 +43,6 @@ pub struct Balancer {
 }
 
 impl Balancer {
-    pub fn new() -> Self {
-        Self {
-            tx_consumers: Default::default(),
-            stake_weights: Default::default(),
-            total_connected_stake: 0,
-            leaders: Default::default(),
-            leader_tpus: Default::default(),
-        }
-    }
-
     pub fn subscribe(
         &mut self,
         identity: String,
@@ -86,39 +78,61 @@ impl Balancer {
         }
     }
 
-    pub fn pick_random_tx_consumer_with_target(&self) -> Option<(&TxConsumer, Vec<String>)> {
-        let mut rng: StdRng = SeedableRng::from_entropy();
-        if self.total_connected_stake == 0 {
-            return None;
-        }
+    pub fn sample_consumer_stake_weighted(&self, rng: &mut StdRng) -> Option<&TxConsumer> {
+        let total_weight = if self.total_connected_stake == 0 {
+            self.tx_consumers.len() as u64
+        } else {
+            self.total_connected_stake
+        };
 
-        let random_stake_point = rng.gen_range(0..self.total_connected_stake);
+        let random_stake_point = rng.gen_range(0..total_weight);
         let mut accumulated_sum = 0;
 
         for (_, tx_consumer) in self.tx_consumers.iter() {
-            accumulated_sum += tx_consumer.stake;
+            accumulated_sum += tx_consumer.stake + 1;
             if random_stake_point < accumulated_sum {
-                return Some((tx_consumer, self.leader_tpus.clone()));
+                return Some(tx_consumer);
             }
         }
         return None;
     }
 
-    pub fn pick_leader_tx_consumers_with_targets(&self) -> Vec<(&TxConsumer, Vec<String>)> {
-        self.tx_consumers
+    pub fn pick_consumers(&self) -> Vec<(&TxConsumer, Vec<String>)> {
+        // If some of the consumers are leaders, pick them.
+        // Pick the rest randomly.
+        let mut consumers: Vec<_> = self
+            .tx_consumers
             .iter()
             .flat_map(|(identity, tx_consumer)| match self.leaders.get(identity) {
                 Some(tpu) => Some((tx_consumer, vec![tpu.clone()])),
                 _ => None,
             })
-            .collect()
-    }
+            .collect();
 
-    pub fn pick_tx_consumers(&self) -> Vec<(&TxConsumer, Vec<String>)> {
-        let mut consumers: Vec<_> = self.pick_leader_tx_consumers_with_targets();
+        let mut rng = SeedableRng::from_entropy();
 
-        if let Some(random_tx_consumer) = self.pick_random_tx_consumer_with_target() {
-            consumers.push(random_tx_consumer);
+        for _ in 0..N_CONSUMERS - consumers.len().min(N_CONSUMERS) {
+            // TODO ... make it so that the sample can not degenerate
+            match self.sample_consumer_stake_weighted(&mut rng) {
+                Some(pick) => {
+                    consumers.push((pick, vec![]));
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+
+        let n = consumers.len();
+        if n > 0 && !self.leader_tpus.is_empty() {
+            let chunk_len = self.leader_tpus.len() / n;
+            for (i, tpus) in self.leader_tpus.chunks(chunk_len).enumerate() {
+                for tpu in tpus {
+                    for j in 0..N_COPIES {
+                        consumers[(i + j) % n].1.push(tpu.clone());
+                    }
+                }
+            }
         }
 
         consumers
@@ -154,7 +168,7 @@ impl Balancer {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         info!("Forwarding tx {}...", &signature);
 
-        let tx_consumers = self.pick_tx_consumers();
+        let tx_consumers = self.pick_consumers();
 
         if tx_consumers.len() == 0 {
             error!("Dropping tx, no available clients");
@@ -193,7 +207,7 @@ pub fn balancer_updater(
     );
 
     let mut refresh_cluster_nodes_hint = Box::pin(
-        tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(3600)),
+        tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
     );
 
     let mut tpu_by_identity = Default::default();
@@ -206,19 +220,20 @@ pub fn balancer_updater(
                         Ok(result) => {
                             info!("Updated TPUs by identity (count: {})", result.len());
                             tpu_by_identity = result;
+                            info!("identities updated # {}", serde_json::to_string(&tpu_by_identity).unwrap_or_else(|_| "null".to_string()));
                         },
                         Err(err) => error!("Failed to update TPUs by identity: {}", err)
                     };
                 },
                 Some(leaders) = rx_leaders.next() => {
                     let leaders_with_tpus = leaders
-                        .iter()
-                        .filter_map(|identity| match tpu_by_identity.get(identity) {
+                        .into_iter()
+                        .filter_map(|identity| match tpu_by_identity.get(&identity) {
                             Some(tpu) => Some((identity.clone(), tpu.clone())),
                             _=> None,
                         })
                         .collect();
-                    info!("New leaders {:?}", &leaders_with_tpus);
+                    info!("new leaders # {:?}", &leaders_with_tpus);
                     balancer.write().await.set_leaders(leaders_with_tpus);
                 },
             }

@@ -98,8 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         params.throttle_parallel,
     );
 
-    let all_tasks: RwLock<HashMap<String, JoinHandle<()>>> =
-       RwLock::new(HashMap::new());
+    let all_tasks: RwLock<HashMap<String, JoinHandle<()>>> = RwLock::new(HashMap::new());
 
     build_tasks(
         grpc_urls_from_file.clone(),
@@ -271,7 +270,6 @@ async fn build_tasks(
 ) {
     let mut all_tasks = all_tasks.write().await;
     for i in grpc_urls {
-
         let grpc_parsed_url: Uri = i.parse().expect("failed to parse grpc url");
 
         let tls_grpc_ca_cert = params.tls_grpc_ca_cert.clone();

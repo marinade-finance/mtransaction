@@ -171,7 +171,7 @@ pub async fn spawn_grpc_client(
     )
     .await
     .map(|v| {
-      info!("Stream ended from gRPC server: {:?}, {:?}", grpc_host, v);
-      v
+        info!("Stream ended from gRPC server: {:?}, {:?}", grpc_host, v);
+        v
     })
 }

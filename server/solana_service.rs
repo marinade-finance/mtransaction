@@ -1,3 +1,4 @@
+use crate::{ N_LEADERS, LEADER_REFRESH_SECONDS };
 use crate::{metrics, rpc_server::Mode};
 use log::{debug, error, info};
 use solana_client::{
@@ -86,7 +87,6 @@ pub fn get_tpu_by_identity(
         .collect())
 }
 
-const MAX_LEADERS: u64 = 5;
 pub fn leaders_stream(
     client: Arc<RpcClient>,
     pubsub_client: Arc<PubsubClient>,
@@ -96,7 +96,7 @@ pub fn leaders_stream(
     tokio::spawn(async move {
         let mut refresh_leaders_schedule_hint = Box::pin(
             tokio_stream::iter(std::iter::repeat(()))
-                .throttle(tokio::time::Duration::from_secs(3600)),
+                .throttle(tokio::time::Duration::from_secs(LEADER_REFRESH_SECONDS)),
         ); // todo implement some sound logic to refresh
         let (mut slot_notifications, _slot_unsubscribe) = pubsub_client.slot_subscribe().await?;
 
@@ -106,11 +106,12 @@ pub fn leaders_stream(
         loop {
             tokio::select! {
                 _ = refresh_leaders_schedule_hint.next() => {
-                    info!("Will refresh leaders..");
+                    info!("Will refresh leaders...");
                     schedule = get_leader_schedule(client.as_ref())?;
+                    info!("leaders refreshed # {}", serde_json::to_string(&schedule).unwrap_or_else(|_| "null".to_string()));
                 },
                 Some(slot_info) = slot_notifications.next() => {
-                    let current_leaders: HashSet<_> = (0..MAX_LEADERS)
+                    let current_leaders: HashSet<_> = (0..N_LEADERS)
                         .map(|nth_leader| nth_leader * 4 + (slot_info.slot % 432000))
                         .map(|slot| schedule.get(&slot))
                         .flatten()

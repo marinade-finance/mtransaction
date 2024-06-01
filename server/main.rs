@@ -16,6 +16,12 @@ use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::sync::RwLock;
 
+pub const N_COPIES: usize = 2;
+pub const N_LEADERS: u64 = 7;
+pub const N_CONSUMERS: usize = 3;
+pub const LEADER_REFRESH_SECONDS: u64 = 3600;
+pub const NODES_REFRESH_SECONDS: u64 = 60;
+
 #[derive(Debug, StructOpt)]
 struct Params {
     #[structopt(long = "tls-grpc-server-cert")]
@@ -70,7 +76,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let params = Params::from_args();
 
     let client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
-    let balancer = Arc::new(RwLock::new(Balancer::new()));
+    let balancer = Arc::new(RwLock::new(Balancer::default()));
 
     let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
 
