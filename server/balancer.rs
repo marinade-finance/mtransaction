@@ -7,7 +7,7 @@ use log::{error, info};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, sync::atomic::{Ordering, AtomicBool}};
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tonic::Status;
@@ -23,6 +23,7 @@ pub struct TxConsumer {
     tx: mpsc::Sender<std::result::Result<grpc_server::pb::ResponseMessageEnvelope, Status>>,
     token: String,
     tx_unsubscribe: Option<oneshot::Sender<()>>,
+    do_unsubscribe: AtomicBool,
 }
 
 impl Drop for TxConsumer {
@@ -63,6 +64,7 @@ impl Balancer {
                 tx: tx.clone(),
                 token,
                 tx_unsubscribe: Some(tx_unsubscribe),
+                do_unsubscribe: false.into(),
             },
         );
         self.recalc_total_connected_stake();
@@ -176,6 +178,7 @@ impl Balancer {
         }
 
         for (tx_consumer, tpus) in tx_consumers {
+            let tpus_json = serde_json::to_string(&tpus).unwrap_or_else(|_| "null".to_string());
             let result = tx_consumer
                 .tx
                 .send(std::result::Result::<_, Status>::Ok(
@@ -183,8 +186,11 @@ impl Balancer {
                 ))
                 .await;
             match result {
-                Ok(_) => info!("Successfully forwarded to {}", tx_consumer.identity),
-                Err(err) => error!("Client disconnected {} {}", tx_consumer.identity, err), // TODO unsubscribe
+                Ok(_) => info!("forwarded to {} # {tpus_json}", tx_consumer.identity),
+                Err(err) => {
+                    error!("Client disconnected {} {}", tx_consumer.identity, err);
+                    tx_consumer.do_unsubscribe.store(true, Ordering::Relaxed);
+                }
             };
         }
         Ok(())
@@ -193,6 +199,18 @@ impl Balancer {
     pub fn set_leaders(&mut self, leaders: HashMap<String, String>) {
         self.leader_tpus = leaders.values().cloned().collect();
         self.leaders = leaders;
+    }
+
+    pub fn flush_unsubscribes(&mut self) {
+        let mut identities: Vec<(String, String)> = vec![];
+        for tx_consumer in self.tx_consumers.values() {
+            if tx_consumer.do_unsubscribe.load(Ordering::Relaxed) {
+                identities.push((tx_consumer.identity.clone(), tx_consumer.token.clone()));
+            }
+        }
+        for entry in identities {
+            self.unsubscribe(&entry.0, &entry.1);
+        }
     }
 }
 
@@ -219,7 +237,7 @@ pub fn balancer_updater(
                 _ = refresh_cluster_nodes_hint.next() => {
                     match get_tpu_by_identity(client.as_ref()) {
                         Ok(result) => {
-                            info!("Updated TPUs by identity (count: {})", result.len());
+                            info!("updated TPUs by identity # {{\"count\":{}}}", result.len());
                             tpu_by_identity = result;
                             info!("identities updated # {}", serde_json::to_string(&tpu_by_identity).unwrap_or_else(|_| "null".to_string()));
                         },
@@ -234,8 +252,10 @@ pub fn balancer_updater(
                             _=> None,
                         })
                         .collect();
-                    info!("new leaders # {:?}", &leaders_with_tpus);
-                    balancer.write().await.set_leaders(leaders_with_tpus);
+                    info!("new leaders # {}", serde_json::to_string(&leaders_with_tpus).unwrap_or_else(|_| "null".to_string()));
+                    let mut lock = balancer.write().await;
+                    lock.set_leaders(leaders_with_tpus);
+                    lock.flush_unsubscribes();
                 },
             }
         }
