@@ -25,7 +25,7 @@ use std::{collections::HashMap, io::Error};
 
 use futures::stream::StreamExt;
 
-pub const VERSION: &str = "rust-0.0.7-beta";
+pub const VERSION: &str = "rust-0.0.13-beta";
 
 // Linearly delay retries up to 60 seconds
 const GRPC_RECONNECT_DELAY: u64 = 1_000;
