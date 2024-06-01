@@ -4,8 +4,7 @@ use crate::metrics;
 use base64::decode;
 use log::{error, info};
 use solana_client::{
-    connection_cache::{ConnectionCache, DEFAULT_TPU_CONNECTION_POOL_SIZE},
-    nonblocking::tpu_connection::TpuConnection,
+    connection_cache::ConnectionCache, nonblocking::tpu_connection::TpuConnection,
 };
 use solana_sdk::{signature::Keypair, transport::TransportError};
 use std::{net::IpAddr, sync::Arc};
@@ -19,13 +18,18 @@ pub struct QuicForwarder {
 
 impl QuicForwarder {
     pub fn new(identity: Option<Keypair>, tpu_addr: Option<IpAddr>, max_permits: usize) -> Self {
-        let mut connection_cache = ConnectionCache::new(DEFAULT_TPU_CONNECTION_POOL_SIZE);
-        if let (Some(identity), Some(tpu_addr)) = (identity, tpu_addr) {
-            if let Err(err) = connection_cache.update_client_certificate(&identity, tpu_addr) {
-                error!("Failed to update client certificate: {}", err);
-            }
-            info!("Updated QUIC certificate");
-        }
+        let cert_info = if let (Some(identity), Some(tpu_addr)) = (&identity, tpu_addr) {
+            Some((identity, tpu_addr))
+        } else {
+            None
+        };
+        let connection_cache = ConnectionCache::new_with_client_options(
+            "default connection cache",
+            2,
+            None,
+            cert_info,
+            None,
+        );
 
         Self {
             max_permits,
@@ -52,7 +56,7 @@ impl QuicForwarder {
 
             info!("Tx {} -> {}", transaction.signature, &tpu);
             let conn = connection_cache.get_nonblocking_connection(&tpu);
-            let request_result = conn.send_wire_transaction(&wire_transaction).await;
+            let request_result = conn.send_data(&wire_transaction).await;
             Self::handle_send_result(source, request_result);
 
             drop(throttle_permit);
