@@ -11,6 +11,10 @@ path = "server/main.rs"
 name = "mtx-client"
 path = "client/main.rs"
 
+[[bin]]
+name = "gossip-check"
+path = "scripts/gossip-check.rs"
+
 [dependencies]
 lazy_static = "1.4.0"
 openssl = { version = "0.10" }
@@ -46,6 +50,8 @@ enum_dispatch = "0.3.8"
 memory-stats = "1.1.0"
 signal-hook-tokio = { version = "0.3.1", features = ["futures-v0_3"] }
 signal-hook = "0.3.17"
+solana-gossip = "1.17.34"
+solana-streamer = "1.17.34"
 
 [build-dependencies]
 tonic-build = { version = "0.8.0", features = ["prost"] }
