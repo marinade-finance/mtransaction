@@ -1,5 +1,7 @@
+use crate::json_str;
 use crate::grpc_server::{self, build_tx_message_envelope};
 use crate::metrics;
+use crate::GOSSIP_ENTRYPOINT;
 use crate::solana_service::{get_tpu_by_identity, leaders_stream};
 use crate::{NODES_REFRESH_SECONDS, N_CONSUMERS, N_COPIES};
 use jsonrpc_http_server::*;
@@ -11,6 +13,13 @@ use std::{collections::HashMap, sync::Arc, sync::atomic::{Ordering, AtomicBool}}
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tonic::Status;
+use std::net::ToSocketAddrs;
+use std::str::FromStr;
+use solana_gossip::contact_info::Protocol;
+use solana_gossip::gossip_service::make_gossip_node;
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signer::keypair;
+use solana_streamer::socket::SocketAddrSpace;
 
 #[derive(Debug)]
 pub struct TxMessage {
@@ -178,7 +187,7 @@ impl Balancer {
         }
 
         for (tx_consumer, tpus) in tx_consumers {
-            let tpus_json = serde_json::to_string(&tpus).unwrap_or_else(|_| "null".to_string());
+            let tpus_json = json_str!(&tpus);
             let result = tx_consumer
                 .tx
                 .send(std::result::Result::<_, Status>::Ok(
@@ -224,9 +233,22 @@ pub fn balancer_updater(
         leaders_stream(client.clone(), pubsub_client.clone()).unwrap(),
     );
 
-    let mut refresh_cluster_nodes_hint = Box::pin(
-        tokio_stream::iter(std::iter::repeat(()))
-            .throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
+    let exit = Arc::new(AtomicBool::new(false));
+    let keypair = keypair::Keypair::new();
+    let entry_addrs: Vec<_> = GOSSIP_ENTRYPOINT.to_socket_addrs().unwrap().collect();
+    info!("balancer_updater spawning...");
+    let (_gossip_service, _, cluster_info) = make_gossip_node(
+        keypair,
+        entry_addrs.first(),
+        exit.clone(),
+        None,
+        0,
+        false,
+        SocketAddrSpace::Global);
+    info!("balancer_updater peer started");
+
+    let mut nodes_hint = Box::pin(
+        tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
     );
 
     let mut tpu_by_identity = Default::default();
@@ -234,12 +256,12 @@ pub fn balancer_updater(
     tokio::spawn(async move {
         loop {
             tokio::select! {
-                _ = refresh_cluster_nodes_hint.next() => {
+                _ = nodes_hint.next() => {
                     match get_tpu_by_identity(client.as_ref()) {
                         Ok(result) => {
                             info!("updated TPUs by identity # {{\"count\":{}}}", result.len());
                             tpu_by_identity = result;
-                            info!("identities updated # {}", serde_json::to_string(&tpu_by_identity).unwrap_or_else(|_| "null".to_string()));
+                            info!("identities updated # {}", json_str!(&tpu_by_identity));
                         },
                         Err(err) => error!("Failed to update TPUs by identity: {}", err)
                     };
@@ -247,17 +269,22 @@ pub fn balancer_updater(
                 Some(leaders) = rx_leaders.next() => {
                     let leaders_with_tpus = leaders
                         .into_iter()
-                        .filter_map(|identity| match tpu_by_identity.get(&identity) {
+                        .filter_map(|identity| match cluster_info.lookup_contact_info(&Pubkey::from_str(&identity).unwrap(), |x| x.clone()).and_then(|x| x.tpu(Protocol::QUIC).ok()).map(|x| x.to_string()).or(tpu_by_identity.get(&identity).cloned()) {
                             Some(tpu) => Some((identity.clone(), tpu.clone())),
                             _=> None,
                         })
                         .collect();
-                    info!("new leaders # {}", serde_json::to_string(&leaders_with_tpus).unwrap_or_else(|_| "null".to_string()));
+                    info!("new leaders # {}", json_str!(&leaders_with_tpus));
                     let mut lock = balancer.write().await;
                     lock.set_leaders(leaders_with_tpus);
                     lock.flush_unsubscribes();
                 },
             }
         }
+
+        // If you ever wanted to stop the gossip_service
+        // exit.store(true, Ordering::Relaxed);
+        // gossip_service.join().unwrap();
+        
     });
 }

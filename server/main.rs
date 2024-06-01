@@ -21,6 +21,7 @@ pub const N_LEADERS: u64 = 7;
 pub const N_CONSUMERS: usize = 3;
 pub const LEADER_REFRESH_SECONDS: u64 = 3600;
 pub const NODES_REFRESH_SECONDS: u64 = 60;
+pub const GOSSIP_ENTRYPOINT: &str = "entrypoint3.mainnet-beta.solana.com:8001";
 
 #[derive(Debug, StructOpt)]
 struct Params {
@@ -68,6 +69,15 @@ struct Params {
 
     #[structopt(long = "jwt-public-key")]
     jwt_public_key: Option<String>,
+}
+
+#[macro_export]
+macro_rules! json_str {
+    (
+        $val:expr $(,)?
+    ) => {
+        serde_json::to_string($val).unwrap_or_else(|_| "null".to_string())
+    };
 }
 
 #[tokio::main]
