@@ -147,7 +147,7 @@ pub async fn spawn_grpc_client(
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;
 
-    let domain_name = grpc_url.host();
+    let _domain_name = grpc_url.host();
 
     info!("Opening the gRPC channel: {:?}", grpc_url.host());
     let channel = match tls {
