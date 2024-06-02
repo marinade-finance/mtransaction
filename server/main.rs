@@ -15,6 +15,7 @@ use solana_client::nonblocking::pubsub_client::PubsubClient;
 use std::sync::Arc;
 use structopt::StructOpt;
 use tokio::sync::RwLock;
+use std::{panic, process};
 
 pub const N_COPIES: usize = 2;
 pub const N_LEADERS: u64 = 7;
@@ -80,8 +81,20 @@ macro_rules! json_str {
     };
 }
 
+
+fn setup_panic_hook() {
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        hook(info);
+        error!("panic_hook forcing exit");
+        process::exit(1);
+    }));
+}
+
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    setup_panic_hook();
+
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let params = Params::from_args();
 
