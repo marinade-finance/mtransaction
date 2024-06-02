@@ -1,6 +1,7 @@
 use crate::{metrics, rpc_server::Mode};
 use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
 use log::{debug, error, info};
+use serde::Deserialize;
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient,
     rpc_response::RpcVoteAccountStatus,
@@ -16,6 +17,7 @@ use std::{
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use eyre::Result;
 
 pub fn solana_client(url: String, commitment: String) -> RpcClient {
     RpcClient::new_with_commitment(url, CommitmentConfig::from_str(&commitment).unwrap())
@@ -263,4 +265,43 @@ fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureWrapper>
             }
         }
     });
+}
+
+#[derive(Deserialize)]
+struct JitoValidatorRecord<'a> {
+    vote_account: &'a str,
+    running_jit: bool,
+}
+
+pub async fn get_jito_validators(vote_to_identity_map: &HashMap<String, String>) -> Result<HashSet<String>> {
+    let url = "https://kobe.mainnet.jito.network/api/v1/validators";
+    let resp = reqwest::get(url).await?.text().await?;
+    let data: Vec<JitoValidatorRecord> = serde_json::from_str(&resp)?;
+    let mut result = HashSet::default();
+    for entry in data {
+        if entry.running_jit {
+            vote_to_identity_map
+                .get(entry.vote_account)
+                .map(|x| result.insert(x.to_string()));
+        }
+    }
+    Ok(result)
+}
+
+
+#[derive(Deserialize)]
+struct ValidatorRecord<'a> {
+    identity: &'a str,
+    vote_account: &'a str,
+}
+
+pub async fn get_vote_to_identity_map() -> Result<HashMap<String, String>> {
+    let url = "http://validators-api.marinade.finance/validators?limit=9999&epochs=0";
+    let resp = reqwest::get(url).await?.text().await?;
+    let data: Vec<ValidatorRecord> = serde_json::from_str(&resp)?;
+    let mut result = HashMap::default();
+    for entry in data {
+        result.insert(entry.vote_account.to_string(), entry.identity.to_string());
+    }
+    Ok(result)
 }

@@ -2,14 +2,14 @@ use crate::json_str;
 use crate::grpc_server::{self, build_tx_message_envelope};
 use crate::metrics;
 use crate::GOSSIP_ENTRYPOINT;
-use crate::solana_service::{get_tpu_by_identity, leaders_stream};
-use crate::{NODES_REFRESH_SECONDS, N_CONSUMERS, N_COPIES};
+use crate::solana_service::{get_tpu_by_identity, leaders_stream, get_vote_to_identity_map, get_jito_validators};
+use crate::{N_CONSUMERS, N_COPIES, NODES_REFRESH_SECONDS};
 use jsonrpc_http_server::*;
 use log::{error, info};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
-use std::{collections::HashMap, sync::Arc, sync::atomic::{Ordering, AtomicBool}};
+use std::{collections::{HashMap, HashSet}, sync::Arc, sync::atomic::{Ordering, AtomicBool}};
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tonic::Status;
@@ -20,6 +20,7 @@ use solana_gossip::gossip_service::make_gossip_node;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::keypair;
 use solana_streamer::socket::SocketAddrSpace;
+use serde::Serialize;
 
 #[derive(Debug)]
 pub struct TxMessage {
@@ -43,13 +44,20 @@ impl Drop for TxConsumer {
     }
 }
 
+#[derive(Clone, Serialize)]
+pub struct LeaderInfo {
+    pub identity: String,
+    pub tpu: String,
+    pub is_jito: bool,
+}
+
 #[derive(Default)]
 pub struct Balancer {
     pub tx_consumers: HashMap<String, TxConsumer>,
     pub stake_weights: HashMap<String, u64>,
     pub total_connected_stake: u64,
-    pub leaders: HashMap<String, String>,
-    pub leader_tpus: Vec<String>,
+    pub leaders: HashMap<String, LeaderInfo>,
+    pub leader_tpus: Vec<LeaderInfo>,
 }
 
 impl Balancer {
@@ -108,7 +116,7 @@ impl Balancer {
         return None;
     }
 
-    pub fn pick_consumers(&self) -> Vec<(&TxConsumer, Vec<String>)> {
+    pub fn pick_consumers(&self) -> Vec<(&TxConsumer, Vec<LeaderInfo>)> {
         // If some of the consumers are leaders, pick them.
         // Pick the rest randomly.
         let mut consumers: Vec<_> = self
@@ -186,16 +194,21 @@ impl Balancer {
             return Err("No available clients connected".into());
         }
 
-        for (tx_consumer, tpus) in tx_consumers {
-            let tpus_json = json_str!(&tpus);
+        for (tx_consumer, info) in tx_consumers {
+            let info_json = json_str!(&info);
+            let tpus = info.iter().map(|x| x.tpu.clone()).collect();
             let result = tx_consumer
                 .tx
                 .send(std::result::Result::<_, Status>::Ok(
-                    build_tx_message_envelope(signature.clone(), data.clone(), tpus),
+                    build_tx_message_envelope(
+                        signature.clone(),
+                        data.clone(),
+                        tpus,
+                    ),
                 ))
                 .await;
             match result {
-                Ok(_) => info!("forwarded to {} # {tpus_json}", tx_consumer.identity),
+                Ok(_) => info!("forwarded to # {info_json}"),
                 Err(err) => {
                     error!("Client disconnected {} {}", tx_consumer.identity, err);
                     tx_consumer.do_unsubscribe.store(true, Ordering::Relaxed);
@@ -205,8 +218,8 @@ impl Balancer {
         Ok(())
     }
 
-    pub fn set_leaders(&mut self, leaders: HashMap<String, String>) {
-        self.leader_tpus = leaders.values().cloned().collect();
+    pub fn set_leaders(&mut self, leader_tpus: Vec<LeaderInfo>, leaders: HashMap<String, LeaderInfo>) {
+        self.leader_tpus = leader_tpus;
         self.leaders = leaders;
     }
 
@@ -252,6 +265,7 @@ pub fn balancer_updater(
     );
 
     let mut tpu_by_identity = Default::default();
+    let mut jito_identities: HashSet<String> = Default::default();
 
     tokio::spawn(async move {
         loop {
@@ -265,19 +279,48 @@ pub fn balancer_updater(
                         },
                         Err(err) => error!("Failed to update TPUs by identity: {}", err)
                     };
-                    //match get_
+                    let map = match get_vote_to_identity_map().await {
+                        Ok(value) => { value }
+                        Err(err) => {
+                            error!("{}", err);
+                            continue;
+                        }
+                    };
+                    jito_identities = match get_jito_validators(&map).await {
+                        Ok(value) => { value }
+                        Err(err) => {
+                            error!("{}", err);
+                            continue;
+                        }
+                    };
+                    
                 },
-                Some(leaders) = rx_leaders.next() => {
-                    let leaders_with_tpus = leaders
+                Some(plain_leaders) = rx_leaders.next() => {
+                    let leaders_info: HashMap<_, _> = plain_leaders
                         .into_iter()
-                        .filter_map(|identity| match cluster_info.lookup_contact_info(&Pubkey::from_str(&identity).unwrap(), |x| x.clone()).and_then(|x| x.tpu(Protocol::QUIC).ok()).map(|x| x.to_string()).or(tpu_by_identity.get(&identity).cloned()) {
-                            Some(tpu) => Some((identity.clone(), tpu.clone())),
-                            _=> None,
-                        })
+                        .filter_map(
+                            |identity| match cluster_info
+                                .lookup_contact_info(&Pubkey::from_str(&identity).unwrap(), |x| x.clone())
+                                .and_then(|x| x.tpu(Protocol::QUIC).ok())
+                                .map(|x| x.to_string())
+                                .or(tpu_by_identity.get(&identity).cloned()) {
+                                    Some(tpu) => {
+                                        let is_jito = jito_identities.get(&identity).is_some();
+                                        Some((
+                                            identity.clone(),
+                                            LeaderInfo {
+                                                identity: identity.clone(),
+                                                tpu: tpu.clone(),
+                                                is_jito,
+                                            }))
+                                    }
+                                    _ => { None }
+                                })
                         .collect();
-                    info!("new leaders # {}", json_str!(&leaders_with_tpus));
+                    info!("new leaders # {}", json_str!(&leaders_info));
+                    let leader_values = leaders_info.values().cloned().collect();
                     let mut lock = balancer.write().await;
-                    lock.set_leaders(leaders_with_tpus);
+                    lock.set_leaders(leader_values, leaders_info);
                     lock.flush_unsubscribes();
                 },
             }

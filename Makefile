@@ -61,6 +61,11 @@ run-server-local: build-server
 		--tls-grpc-ca-cert        ./certs/ca.cert \
 
 run-client: build-client
+	cargo run --bin mtx-client -- \
+		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--grpc-urls-file       ./client.yml \
+		--tls-grpc-client-key  ./certs/client.$(client).key \
+		--tls-grpc-client-cert ./certs/client.$(client).cert \
 
 run-client-rpc-devnet: build-client
 	cargo run --bin mtx-client -- \
