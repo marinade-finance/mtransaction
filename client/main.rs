@@ -11,6 +11,8 @@ use forwarder::ForwardedTransaction;
 use log::{error, info};
 use signal_hook_tokio::Signals;
 use solana_sdk::signature::read_keypair_file;
+use std::panic;
+use std::process;
 use structopt::StructOpt;
 use tokio::{
     sync::{mpsc::UnboundedSender, RwLock},
@@ -18,8 +20,6 @@ use tokio::{
     time::{sleep, Duration},
 };
 use tonic::transport::Uri;
-use std::panic;
-use std::process;
 
 use signal_hook::consts::SIGHUP;
 
