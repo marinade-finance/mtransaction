@@ -1,7 +1,7 @@
 use crate::grpc_server::{self, build_tx_message_envelope};
 use crate::metrics;
 use crate::solana_service::{get_tpu_by_identity, leaders_stream};
-use crate::{N_CONSUMERS, N_COPIES, NODES_REFRESH_SECONDS};
+use crate::{NODES_REFRESH_SECONDS, N_CONSUMERS, N_COPIES};
 use jsonrpc_http_server::*;
 use log::{error, info};
 use rand::rngs::StdRng;
@@ -207,7 +207,8 @@ pub fn balancer_updater(
     );
 
     let mut refresh_cluster_nodes_hint = Box::pin(
-        tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
+        tokio_stream::iter(std::iter::repeat(()))
+            .throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
     );
 
     let mut tpu_by_identity = Default::default();

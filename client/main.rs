@@ -11,6 +11,8 @@ use forwarder::ForwardedTransaction;
 use log::{error, info};
 use signal_hook_tokio::Signals;
 use solana_sdk::signature::read_keypair_file;
+use std::panic;
+use std::process;
 use structopt::StructOpt;
 use tokio::{
     sync::{mpsc::UnboundedSender, RwLock},
@@ -64,8 +66,19 @@ struct Params {
     throttle_parallel: usize,
 }
 
+fn setup_panic_hook() {
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        hook(info);
+        error!("panic_hook forcing exit");
+        process::exit(1);
+    }));
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    setup_panic_hook();
+
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
     let params = Params::from_args();
