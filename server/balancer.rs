@@ -25,6 +25,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tonic::Status;
+use tracing::Instrument;
 
 #[derive(Debug)]
 pub struct TxMessage {
@@ -183,15 +184,17 @@ impl Balancer {
 
     pub async fn publish(
         &self,
+        span: tracing::Span,
         signature: String,
         data: String,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        info!("Forwarding tx {}...", &signature);
+        span.in_scope(|| info!("Forwarding tx {}...", &signature));
 
         let tx_consumers = self.pick_consumers();
         if tx_consumers.is_empty() {
+            let _span = span.enter();
             error!("Dropping tx, no available clients");
-            return Err("No available clients connected".into());
+            return Err(format!("No available clients connected").into());
         }
 
         for (tx_consumer, info) in tx_consumers {
@@ -199,10 +202,14 @@ impl Balancer {
             let tpus = info.iter().map(|x| x.tpu.clone()).collect();
             let result = tx_consumer
                 .tx
-                .send(std::result::Result::<_, Status>::Ok(
-                    build_tx_message_envelope(signature.clone(), data.clone(), tpus),
-                ))
+                .send(Ok(build_tx_message_envelope(
+                    signature.clone(),
+                    data.clone(),
+                    tpus,
+                )))
+                .instrument(span.clone())
                 .await;
+            let _span = span.enter();
             match result {
                 Ok(_) => info!("forwarded to {} # {info_json}", tx_consumer.identity),
                 Err(err) => {

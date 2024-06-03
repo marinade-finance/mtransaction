@@ -9,13 +9,14 @@ use crate::balancer::*;
 use crate::grpc_server::*;
 use crate::rpc_server::*;
 use crate::solana_service::*;
-use env_logger::Env;
 use log::{error, info};
 use solana_client::nonblocking::pubsub_client::PubsubClient;
 use std::sync::Arc;
+use std::time::SystemTime;
 use std::{panic, process};
 use structopt::StructOpt;
 use tokio::sync::RwLock;
+use tracing_log::LogTracer;
 
 pub const N_COPIES: usize = 2;
 pub const N_LEADERS: u64 = 7;
@@ -70,6 +71,17 @@ struct Params {
 
     #[structopt(long = "jwt-public-key")]
     jwt_public_key: Option<String>,
+
+    #[structopt(long = "debug")]
+    debug: Option<bool>,
+}
+
+#[inline]
+pub fn time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
 }
 
 #[macro_export]
@@ -94,8 +106,20 @@ fn setup_panic_hook() {
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     setup_panic_hook();
 
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let params = Params::from_args();
+
+    LogTracer::init().expect("Setting up log compatibility failed");
+    let subscriber = tracing_subscriber::fmt::Subscriber::builder()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_max_level(if params.debug.unwrap_or(false) {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        })
+        .compact()
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
 
     let client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
     let balancer = Arc::new(RwLock::new(Balancer::default()));
