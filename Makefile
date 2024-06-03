@@ -58,7 +58,7 @@ run-server-local: build-server
 		--stake-override-sol      1000000 2000000 \
 		--tls-grpc-server-cert    ./certs/localhost.cert \
 		--tls-grpc-server-key     ./certs/localhost.key \
-		--tls-grpc-ca-cert        ./certs/ca.cert \
+		--tls-grpc-ca-cert        ./certs/ca.cert
 
 run-client: build-client
 	cargo run --bin mtx-client -- \

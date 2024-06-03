@@ -1,16 +1,13 @@
 use crate::grpc_server::{self, build_tx_message_envelope};
 use crate::json_str;
 use crate::metrics;
-use crate::solana_service::{
-    get_jito_validators, get_tpu_by_identity, get_vote_to_identity_map, leaders_stream, ValidatorRecord
-};
+use crate::solana_service::{get_leader_info, leaders_stream, LeaderInfo};
 use crate::GOSSIP_ENTRYPOINT;
 use crate::{NODES_REFRESH_SECONDS, N_CONSUMERS, N_COPIES};
 use jsonrpc_http_server::*;
 use log::{error, info};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use serde::Serialize;
 use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
 use solana_gossip::cluster_info::ClusterInfo;
 use solana_gossip::contact_info::Protocol;
@@ -21,7 +18,7 @@ use solana_streamer::socket::SocketAddrSpace;
 use std::net::ToSocketAddrs;
 use std::str::FromStr;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
 };
@@ -49,14 +46,6 @@ impl Drop for TxConsumer {
             let _ = tx_unsubscribe.send(());
         }
     }
-}
-
-#[derive(Clone, Serialize)]
-pub struct LeaderInfo {
-    pub identity: String,
-    pub tpu: String,
-    pub dc_full_city: String,
-    pub is_jito: bool,
 }
 
 #[derive(Default)]
@@ -107,7 +96,11 @@ impl Balancer {
 
     pub fn sample_consumer_stake_weighted(&self, rng: &mut StdRng) -> Option<&TxConsumer> {
         let total_weight = if self.total_connected_stake == 0 {
-            self.tx_consumers.len() as u64
+            if !self.tx_consumers.is_empty() {
+                self.tx_consumers.len() as u64
+            } else {
+                return None;
+            }
         } else {
             self.total_connected_stake
         };
@@ -196,8 +189,7 @@ impl Balancer {
         info!("Forwarding tx {}...", &signature);
 
         let tx_consumers = self.pick_consumers();
-
-        if tx_consumers.len() == 0 {
+        if tx_consumers.is_empty() {
             error!("Dropping tx, no available clients");
             return Err("No available clients connected".into());
         }
@@ -212,7 +204,7 @@ impl Balancer {
                 ))
                 .await;
             match result {
-                Ok(_) => info!("forwarded to # {info_json}"),
+                Ok(_) => info!("forwarded to {} # {info_json}", tx_consumer.identity),
                 Err(err) => {
                     error!("Client disconnected {} {}", tx_consumer.identity, err);
                     tx_consumer.do_unsubscribe.store(true, Ordering::Relaxed);
@@ -246,28 +238,17 @@ impl Balancer {
 
 fn lookup_info(
     cluster_info: &Arc<ClusterInfo>,
-    tpu_by_identity: &HashMap<String, String>,
-    jito_identities: &HashSet<String>,
-    validator_records: &HashMap<String, ValidatorRecord>,
+    validator_records: &HashMap<String, LeaderInfo>,
     identity: &str,
 ) -> Option<LeaderInfo> {
-    cluster_info
-        .lookup_contact_info(&Pubkey::from_str(identity).unwrap(), |x| x.clone())
-        .and_then(|x| x.tpu(Protocol::QUIC).ok())
-        .map(|x| x.to_string())
-        .or(tpu_by_identity.get(identity).cloned())
-        .and_then(|tpu| {
-            let is_jito = jito_identities.get(identity).is_some();
-            validator_records.get(identity).map(
-                |record|
-                LeaderInfo {
-                    identity: identity.to_string(),
-                    tpu: tpu.clone(),
-                    dc_full_city: record.dc_full_city.clone(),
-                    is_jito,
-                }
-            )
-        })
+    validator_records.get(identity).map(|record| {
+        let mut record = record.clone();
+        cluster_info
+            .lookup_contact_info(&Pubkey::from_str(identity).unwrap(), |x| x.clone())
+            .and_then(|x| x.tpu(Protocol::QUIC).ok())
+            .map(|x| record.tpu = x.to_string());
+        record
+    })
 }
 
 pub fn balancer_updater(
@@ -297,55 +278,31 @@ pub fn balancer_updater(
 
     let mut nodes_hint = Box::pin(
         tokio_stream::iter(std::iter::repeat(()))
-            .throttle(tokio::time::Duration::from_secs(1)),
+            .throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
     );
 
-    let mut tpu_by_identity: HashMap<String, String> = HashMap::default();
-    let mut validator_records: HashMap<String, ValidatorRecord> = HashMap::default();
-    let mut jito_identities: HashSet<String> = HashSet::default();
+    let mut info_map: HashMap<String, LeaderInfo> = HashMap::default();
 
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 _ = nodes_hint.next() => {
-                    info!("balancer_updater refreshing nodes");
-                    match get_tpu_by_identity(client.as_ref()) {
-                        Ok(result) => {
-                            info!("updated TPUs by identity # {{\"count\":{}}}", result.len());
-                            tpu_by_identity = result;
-                            info!("identities updated # {}", json_str!(&tpu_by_identity));
-                        },
-                        Err(err) => error!("Failed to update TPUs by identity: {}", err)
-                    };
-                    validator_records = match get_vote_to_identity_map().await {
-                        Ok(value) => { value }
+                    info!("balancer_updater refreshing validator records");
+                    match get_leader_info(client.as_ref()).await {
+                        Ok(value) => { info_map = value }
                         Err(err) => {
-                            error!("Failed to update vote to identity: {}", err);
+                            error!("Failed to refresh validator records: {}", err);
                             continue;
                         }
-                    };
-                    jito_identities = match get_jito_validators(&validator_records).await {
-                        Ok(value) => { value }
-                        Err(err) => {
-                            error!("Failed to update Jito validators: {}", err);
-                            continue;
-                        }
-                    };
-
+                    }
                 },
                 Some(plain_leaders) = rx_leaders.next() => {
                     let leaders_info: HashMap<String, LeaderInfo> = plain_leaders
                         .into_iter()
                         .filter_map(
                             |identity|
-                            lookup_info(
-                                &cluster_info,
-                                &tpu_by_identity,
-                                &jito_identities,
-                                &validator_records,
-                                &identity,
-                            )
-                                .map(|info| (identity, info))
+                            lookup_info(&cluster_info, &info_map, &identity)
+                                .map(|value| (identity, value))
                         )
                         .collect();
                     info!("new leaders # {}", json_str!(&leaders_info));
