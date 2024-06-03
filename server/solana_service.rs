@@ -1,5 +1,5 @@
-use crate::{ N_LEADERS, LEADER_REFRESH_SECONDS };
 use crate::{metrics, rpc_server::Mode};
+use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
 use log::{debug, error, info};
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient,
