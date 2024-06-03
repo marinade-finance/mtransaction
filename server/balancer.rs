@@ -12,6 +12,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::Serialize;
 use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
+use solana_gossip::cluster_info::ClusterInfo;
 use solana_gossip::contact_info::Protocol;
 use solana_gossip::gossip_service::make_gossip_node;
 use solana_sdk::pubkey::Pubkey;
@@ -242,6 +243,27 @@ impl Balancer {
     }
 }
 
+fn lookup_info(
+    cluster_info: &Arc<ClusterInfo>,
+    tpu_by_identity: &HashMap<String, String>,
+    jito_identities: &HashSet<String>,
+    identity: &str,
+) -> Option<LeaderInfo> {
+    cluster_info
+        .lookup_contact_info(&Pubkey::from_str(identity).unwrap(), |x| x.clone())
+        .and_then(|x| x.tpu(Protocol::QUIC).ok())
+        .map(|x| x.to_string())
+        .or(tpu_by_identity.get(identity).cloned())
+        .map(|tpu| {
+            let is_jito = jito_identities.get(identity).is_some();
+            LeaderInfo {
+                identity: identity.to_string(),
+                tpu: tpu.clone(),
+                is_jito,
+            }
+        })
+}
+
 pub fn balancer_updater(
     balancer: Arc<RwLock<Balancer>>,
     client: Arc<RpcClient>,
@@ -259,7 +281,7 @@ pub fn balancer_updater(
     let (_gossip_service, _, cluster_info) = make_gossip_node(
         keypair,
         entry_addrs.first(),
-        exit.clone(),
+        exit,
         None,
         0,
         false,
@@ -272,8 +294,8 @@ pub fn balancer_updater(
             .throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
     );
 
-    let mut tpu_by_identity = Default::default();
-    let mut jito_identities: HashSet<String> = Default::default();
+    let mut tpu_by_identity: HashMap<String, String> = HashMap::default();
+    let mut jito_identities: HashSet<String> = HashSet::default();
 
     tokio::spawn(async move {
         loop {
@@ -304,26 +326,18 @@ pub fn balancer_updater(
 
                 },
                 Some(plain_leaders) = rx_leaders.next() => {
-                    let leaders_info: HashMap<_, _> = plain_leaders
+                    let leaders_info: HashMap<String, LeaderInfo> = plain_leaders
                         .into_iter()
                         .filter_map(
-                            |identity| match cluster_info
-                                .lookup_contact_info(&Pubkey::from_str(&identity).unwrap(), |x| x.clone())
-                                .and_then(|x| x.tpu(Protocol::QUIC).ok())
-                                .map(|x| x.to_string())
-                                .or(tpu_by_identity.get(&identity).cloned()) {
-                                    Some(tpu) => {
-                                        let is_jito = jito_identities.get(&identity).is_some();
-                                        Some((
-                                            identity.clone(),
-                                            LeaderInfo {
-                                                identity: identity.clone(),
-                                                tpu: tpu.clone(),
-                                                is_jito,
-                                            }))
-                                    }
-                                    _ => { None }
-                                })
+                            |identity|
+                            lookup_info(
+                                &cluster_info,
+                                &tpu_by_identity,
+                                &jito_identities,
+                                &identity,
+                            )
+                                .map(|info| (identity, info))
+                        )
                         .collect();
                     info!("new leaders # {}", json_str!(&leaders_info));
                     let leader_values = leaders_info.values().cloned().collect();
@@ -333,9 +347,5 @@ pub fn balancer_updater(
                 },
             }
         }
-
-        // If you ever wanted to stop the gossip_service
-        // exit.store(true, Ordering::Relaxed);
-        // gossip_service.join().unwrap();
     });
 }

@@ -270,7 +270,7 @@ fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureWrapper>
 #[derive(Deserialize)]
 struct JitoValidatorRecord<'a> {
     vote_account: &'a str,
-    running_jit: bool,
+    running_jito: bool,
 }
 
 pub async fn get_jito_validators(
@@ -281,7 +281,7 @@ pub async fn get_jito_validators(
     let data: Vec<JitoValidatorRecord> = serde_json::from_str(&resp)?;
     let mut result = HashSet::default();
     for entry in data {
-        if entry.running_jit {
+        if entry.running_jito {
             vote_to_identity_map
                 .get(entry.vote_account)
                 .map(|x| result.insert(x.to_string()));
