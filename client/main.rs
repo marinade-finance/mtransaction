@@ -20,8 +20,6 @@ use tokio::{
     time::{sleep, Duration},
 };
 use tonic::transport::Uri;
-use std::panic;
-use std::process;
 
 use signal_hook::consts::SIGHUP;
 
