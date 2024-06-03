@@ -1,26 +1,32 @@
-use crate::json_str;
 use crate::grpc_server::{self, build_tx_message_envelope};
+use crate::json_str;
 use crate::metrics;
+use crate::solana_service::{
+    get_jito_validators, get_tpu_by_identity, get_vote_to_identity_map, leaders_stream,
+};
 use crate::GOSSIP_ENTRYPOINT;
-use crate::solana_service::{get_tpu_by_identity, leaders_stream, get_vote_to_identity_map, get_jito_validators};
-use crate::{N_CONSUMERS, N_COPIES, NODES_REFRESH_SECONDS};
+use crate::{NODES_REFRESH_SECONDS, N_CONSUMERS, N_COPIES};
 use jsonrpc_http_server::*;
 use log::{error, info};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use serde::Serialize;
 use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
-use std::{collections::{HashMap, HashSet}, sync::Arc, sync::atomic::{Ordering, AtomicBool}};
-use tokio::sync::{mpsc, oneshot, RwLock};
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
-use tonic::Status;
-use std::net::ToSocketAddrs;
-use std::str::FromStr;
 use solana_gossip::contact_info::Protocol;
 use solana_gossip::gossip_service::make_gossip_node;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::keypair;
 use solana_streamer::socket::SocketAddrSpace;
-use serde::Serialize;
+use std::net::ToSocketAddrs;
+use std::str::FromStr;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::atomic::{AtomicBool, Ordering},
+    sync::Arc,
+};
+use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use tonic::Status;
 
 #[derive(Debug)]
 pub struct TxMessage {
@@ -200,11 +206,7 @@ impl Balancer {
             let result = tx_consumer
                 .tx
                 .send(std::result::Result::<_, Status>::Ok(
-                    build_tx_message_envelope(
-                        signature.clone(),
-                        data.clone(),
-                        tpus,
-                    ),
+                    build_tx_message_envelope(signature.clone(), data.clone(), tpus),
                 ))
                 .await;
             match result {
@@ -218,7 +220,11 @@ impl Balancer {
         Ok(())
     }
 
-    pub fn set_leaders(&mut self, leader_tpus: Vec<LeaderInfo>, leaders: HashMap<String, LeaderInfo>) {
+    pub fn set_leaders(
+        &mut self,
+        leader_tpus: Vec<LeaderInfo>,
+        leaders: HashMap<String, LeaderInfo>,
+    ) {
         self.leader_tpus = leader_tpus;
         self.leaders = leaders;
     }
@@ -257,11 +263,13 @@ pub fn balancer_updater(
         None,
         0,
         false,
-        SocketAddrSpace::Global);
+        SocketAddrSpace::Global,
+    );
     info!("balancer_updater peer started");
 
     let mut nodes_hint = Box::pin(
-        tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
+        tokio_stream::iter(std::iter::repeat(()))
+            .throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
     );
 
     let mut tpu_by_identity = Default::default();
@@ -293,7 +301,7 @@ pub fn balancer_updater(
                             continue;
                         }
                     };
-                    
+
                 },
                 Some(plain_leaders) = rx_leaders.next() => {
                     let leaders_info: HashMap<_, _> = plain_leaders
@@ -329,6 +337,5 @@ pub fn balancer_updater(
         // If you ever wanted to stop the gossip_service
         // exit.store(true, Ordering::Relaxed);
         // gossip_service.join().unwrap();
-        
     });
 }

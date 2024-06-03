@@ -13,9 +13,9 @@ use env_logger::Env;
 use log::{error, info};
 use solana_client::nonblocking::pubsub_client::PubsubClient;
 use std::sync::Arc;
+use std::{panic, process};
 use structopt::StructOpt;
 use tokio::sync::RwLock;
-use std::{panic, process};
 
 pub const N_COPIES: usize = 2;
 pub const N_LEADERS: u64 = 7;
@@ -80,7 +80,6 @@ macro_rules! json_str {
         serde_json::to_string($val).unwrap_or_else(|_| "null".to_string())
     };
 }
-
 
 fn setup_panic_hook() {
     let hook = panic::take_hook();

@@ -1,5 +1,6 @@
 use crate::{metrics, rpc_server::Mode};
 use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
+use eyre::Result;
 use log::{debug, error, info};
 use serde::Deserialize;
 use solana_client::{
@@ -17,7 +18,6 @@ use std::{
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
-use eyre::Result;
 
 pub fn solana_client(url: String, commitment: String) -> RpcClient {
     RpcClient::new_with_commitment(url, CommitmentConfig::from_str(&commitment).unwrap())
@@ -273,7 +273,9 @@ struct JitoValidatorRecord<'a> {
     running_jit: bool,
 }
 
-pub async fn get_jito_validators(vote_to_identity_map: &HashMap<String, String>) -> Result<HashSet<String>> {
+pub async fn get_jito_validators(
+    vote_to_identity_map: &HashMap<String, String>,
+) -> Result<HashSet<String>> {
     let url = "https://kobe.mainnet.jito.network/api/v1/validators";
     let resp = reqwest::get(url).await?.text().await?;
     let data: Vec<JitoValidatorRecord> = serde_json::from_str(&resp)?;
@@ -287,7 +289,6 @@ pub async fn get_jito_validators(vote_to_identity_map: &HashMap<String, String>)
     }
     Ok(result)
 }
-
 
 #[derive(Deserialize)]
 struct ValidatorRecord<'a> {
