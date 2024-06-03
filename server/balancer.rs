@@ -2,7 +2,7 @@ use crate::grpc_server::{self, build_tx_message_envelope};
 use crate::json_str;
 use crate::metrics;
 use crate::solana_service::{
-    get_jito_validators, get_tpu_by_identity, get_vote_to_identity_map, leaders_stream,
+    get_jito_validators, get_tpu_by_identity, get_vote_to_identity_map, leaders_stream, ValidatorRecord
 };
 use crate::GOSSIP_ENTRYPOINT;
 use crate::{NODES_REFRESH_SECONDS, N_CONSUMERS, N_COPIES};
@@ -55,6 +55,7 @@ impl Drop for TxConsumer {
 pub struct LeaderInfo {
     pub identity: String,
     pub tpu: String,
+    pub dc_full_city: String,
     pub is_jito: bool,
 }
 
@@ -247,6 +248,7 @@ fn lookup_info(
     cluster_info: &Arc<ClusterInfo>,
     tpu_by_identity: &HashMap<String, String>,
     jito_identities: &HashSet<String>,
+    validator_records: &HashMap<String, ValidatorRecord>,
     identity: &str,
 ) -> Option<LeaderInfo> {
     cluster_info
@@ -254,13 +256,17 @@ fn lookup_info(
         .and_then(|x| x.tpu(Protocol::QUIC).ok())
         .map(|x| x.to_string())
         .or(tpu_by_identity.get(identity).cloned())
-        .map(|tpu| {
+        .and_then(|tpu| {
             let is_jito = jito_identities.get(identity).is_some();
-            LeaderInfo {
-                identity: identity.to_string(),
-                tpu: tpu.clone(),
-                is_jito,
-            }
+            validator_records.get(identity).map(
+                |record|
+                LeaderInfo {
+                    identity: identity.to_string(),
+                    tpu: tpu.clone(),
+                    dc_full_city: record.dc_full_city.clone(),
+                    is_jito,
+                }
+            )
         })
 }
 
@@ -291,16 +297,18 @@ pub fn balancer_updater(
 
     let mut nodes_hint = Box::pin(
         tokio_stream::iter(std::iter::repeat(()))
-            .throttle(tokio::time::Duration::from_secs(NODES_REFRESH_SECONDS)),
+            .throttle(tokio::time::Duration::from_secs(1)),
     );
 
     let mut tpu_by_identity: HashMap<String, String> = HashMap::default();
+    let mut validator_records: HashMap<String, ValidatorRecord> = HashMap::default();
     let mut jito_identities: HashSet<String> = HashSet::default();
 
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 _ = nodes_hint.next() => {
+                    info!("balancer_updater refreshing nodes");
                     match get_tpu_by_identity(client.as_ref()) {
                         Ok(result) => {
                             info!("updated TPUs by identity # {{\"count\":{}}}", result.len());
@@ -309,17 +317,17 @@ pub fn balancer_updater(
                         },
                         Err(err) => error!("Failed to update TPUs by identity: {}", err)
                     };
-                    let map = match get_vote_to_identity_map().await {
+                    validator_records = match get_vote_to_identity_map().await {
                         Ok(value) => { value }
                         Err(err) => {
-                            error!("{}", err);
+                            error!("Failed to update vote to identity: {}", err);
                             continue;
                         }
                     };
-                    jito_identities = match get_jito_validators(&map).await {
+                    jito_identities = match get_jito_validators(&validator_records).await {
                         Ok(value) => { value }
                         Err(err) => {
-                            error!("{}", err);
+                            error!("Failed to update Jito validators: {}", err);
                             continue;
                         }
                     };
@@ -334,6 +342,7 @@ pub fn balancer_updater(
                                 &cluster_info,
                                 &tpu_by_identity,
                                 &jito_identities,
+                                &validator_records,
                                 &identity,
                             )
                                 .map(|info| (identity, info))
