@@ -53,7 +53,7 @@ impl Drop for TxConsumer {
 
 #[derive(Default)]
 struct RttValue {
-    rtt: u64,
+    took: u64,
     n: u64,
 }
 
@@ -65,6 +65,20 @@ pub struct Balancer {
     leader_tpus: Vec<LeaderInfo>,
     rtt_values: HashMap<String, HashMap<String, RttValue>>,
     watcher_inbox: UnboundedSender<SignatureRecord>,
+}
+
+pub fn safe_reject_sample(rng: &mut StdRng, density: f64) -> f64 {
+    // beware that the density has to be < 1.0, otherwise the algorithm produces
+    // bad results
+    for _ in 0..100 {
+        let rand: f64 = rng.gen();
+        if rand < density {
+            return rand;
+        }
+    }
+    // if the sampling fails, ignore density, but return a sample
+    // this way, the actual density sampled is a mixture
+    rng.gen()
 }
 
 impl Balancer {
@@ -116,6 +130,45 @@ impl Balancer {
         }
     }
 
+    pub fn calculate_consumer_density(&self, identity: &str, tpu: &str) -> f64 {
+        // the density dereases linearily with rtt reaching 40ms
+        // it also decreases with increasing transaction loss for the consumer
+        let tpu_ip = match tpu.split(':').next() {
+            Some(value) => { value }
+            None => { return 0.01; }
+        };
+        let rtt = self.rtt_values.get(identity)
+            .and_then(|x| x.get(tpu_ip))
+            .map(|x| x.took as f64 / x.n as f64)
+            .unwrap_or(40.0);
+        (40.0 - rtt).max(0.01)
+    }
+
+    pub fn sample_consumer_for_tpu(&self, rng: &mut StdRng, identity: &str, tpu: &str) -> Option<&TxConsumer> {
+        let total_weight = if self.total_connected_stake == 0 {
+            if !self.tx_consumers.is_empty() {
+                self.tx_consumers.len() as u64
+            } else {
+                return None;
+            }
+        } else {
+            self.total_connected_stake
+        };
+
+        let density = self.calculate_consumer_density(identity, tpu);
+        let rand = safe_reject_sample(rng, density);
+        let random_stake_point = (rand * total_weight as f64) as u64;
+        let mut accumulated_sum = 0;
+
+        for (_, tx_consumer) in self.tx_consumers.iter() {
+            accumulated_sum += tx_consumer.stake + 1;
+            if random_stake_point < accumulated_sum {
+                return Some(tx_consumer);
+            }
+        }
+        return None;
+    }
+
     pub fn sample_consumer_stake_weighted(&self, rng: &mut StdRng) -> Option<&TxConsumer> {
         let total_weight = if self.total_connected_stake == 0 {
             if !self.tx_consumers.is_empty() {
@@ -127,7 +180,7 @@ impl Balancer {
             self.total_connected_stake
         };
 
-        let random_stake_point = rng.gen_range(0..total_weight);
+        let random_stake_point = (rng.gen::<f64>() * total_weight as f64) as u64;
         let mut accumulated_sum = 0;
 
         for (_, tx_consumer) in self.tx_consumers.iter() {
@@ -140,6 +193,14 @@ impl Balancer {
     }
 
     pub fn pick_consumers(&self) -> Vec<(&TxConsumer, Vec<LeaderInfo>)> {
+        let mut rng = SeedableRng::from_entropy();
+
+        for tpu in &self.leader_tpus {
+            let candidate = self.sample_consumer_stake_weighted(rng);
+            let density = self.calculate_consumer_density(&candidate.identity, tpu);
+            let rand = safe_reject_sample(rng, density);
+        }
+
         // If some of the consumers are leaders, pick them.
         // Pick the rest randomly.
         let mut consumers: Vec<_> = self
@@ -150,8 +211,6 @@ impl Balancer {
                 _ => None,
             })
             .collect();
-
-        let mut rng = SeedableRng::from_entropy();
 
         for _ in 0..N_CONSUMERS - consumers.len().min(N_CONSUMERS) {
             // TODO ... make it so that the sample can not degenerate
@@ -247,8 +306,14 @@ impl Balancer {
                     info!("forwarded to {} # {info_json}", tx_consumer.identity);
                     session.consumers.push(tx_consumer.identity.clone());
                     for tpu_ip in tpu_ips {
-                        session.tpu_ips.insert(tpu_ip);
+                        metrics::CHAIN_TX_SUBMIT_BY_TPU_IP
+                            .with_label_values(&[&tpu_ip])
+                            .inc();
+                        session.tpu_ips.push(tpu_ip);
                     }
+                    metrics::CHAIN_TX_SUBMIT_BY_CONSUMER
+                        .with_label_values(&[&tx_consumer.identity])
+                        .inc();
                 }
                 Err(err) => {
                     error!("Client disconnected {} {}", tx_consumer.identity, err);
@@ -282,11 +347,17 @@ impl Balancer {
         let slot = self.rtt_values
             .entry(identity.to_string())
             .or_default()
-            .entry(value.ip)
+            .entry(value.ip.clone())
             .or_default();
         let n = slot.n + 1;
         slot.rtt = (slot.n * slot.rtt + value.rtt) / n;
         slot.n = n;
+        metrics::CLIENT_TPU_IP_PING_RTT
+            .with_label_values(&[
+                &identity,
+                &value.ip
+            ])
+            .set(slot.rtt as f64)
     }
 
     pub fn flush_unsubscribes(&mut self) {

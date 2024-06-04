@@ -51,11 +51,6 @@ impl Iterator for Ping {
     }
 }
 
-pub struct RttValue {
-    pub rtt: u64,
-    pub n: u64,
-}
-
 pub fn build_tx_message_envelope(
     signature: String,
     data: String,
