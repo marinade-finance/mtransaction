@@ -2,8 +2,9 @@ use crate::grpc_server::{self, build_tx_message_envelope};
 use crate::json_str;
 use crate::metrics;
 use crate::solana_service::{get_leader_info, leaders_stream, LeaderInfo};
-use crate::GOSSIP_ENTRYPOINT;
-use crate::{NODES_REFRESH_SECONDS, N_CONSUMERS, N_COPIES};
+use crate::{GOSSIP_ENTRYPOINT, NODES_REFRESH_SECONDS, N_CONSUMERS, N_COPIES};
+use crate::solana_service::SignatureRecord;
+use crate::grpc_server::pb;
 use jsonrpc_http_server::*;
 use log::{error, info};
 use rand::rngs::StdRng;
@@ -18,7 +19,7 @@ use solana_streamer::socket::SocketAddrSpace;
 use std::net::ToSocketAddrs;
 use std::str::FromStr;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
 };
@@ -26,6 +27,7 @@ use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tonic::Status;
 use tracing::Instrument;
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug)]
 pub struct TxMessage {
@@ -50,15 +52,34 @@ impl Drop for TxConsumer {
 }
 
 #[derive(Default)]
+struct RttValue {
+    rtt: u64,
+    n: u64,
+}
+
 pub struct Balancer {
-    pub tx_consumers: HashMap<String, TxConsumer>,
-    pub stake_weights: HashMap<String, u64>,
-    pub total_connected_stake: u64,
-    pub leaders: HashMap<String, LeaderInfo>,
-    pub leader_tpus: Vec<LeaderInfo>,
+    tx_consumers: HashMap<String, TxConsumer>,
+    stake_weights: HashMap<String, u64>,
+    total_connected_stake: u64,
+    leaders: HashMap<String, LeaderInfo>,
+    leader_tpus: Vec<LeaderInfo>,
+    rtt_values: HashMap<String, HashMap<String, RttValue>>,
+    watcher_inbox: UnboundedSender<SignatureRecord>,
 }
 
 impl Balancer {
+    pub fn new(watcher_inbox: UnboundedSender<SignatureRecord>) -> Self {
+        Self {
+            watcher_inbox,
+            tx_consumers: Default::default(),
+            stake_weights: Default::default(),
+            total_connected_stake: Default::default(),
+            leaders: Default::default(),
+            leader_tpus: Default::default(),
+            rtt_values: Default::default(),
+        }
+    }
+
     pub fn subscribe(
         &mut self,
         identity: String,
@@ -68,7 +89,7 @@ impl Balancer {
         mpsc::Receiver<std::result::Result<grpc_server::pb::ResponseMessageEnvelope, Status>>,
         oneshot::Receiver<()>,
     ) {
-        info!("Subscribing {} ({})", &identity, &token);
+        info!("Subscribing # {{\"identity\":\"{identity}\",\"token\":\"{token}\"}}");
         let (tx, rx) = mpsc::channel(100);
         let (tx_unsubscribe, rx_unsubcribe) = oneshot::channel();
         self.tx_consumers.insert(
@@ -185,6 +206,7 @@ impl Balancer {
     pub async fn publish(
         &self,
         span: tracing::Span,
+        mut session: SignatureRecord,
         signature: String,
         data: String,
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -199,7 +221,17 @@ impl Balancer {
 
         for (tx_consumer, info) in tx_consumers {
             let info_json = json_str!(&info);
-            let tpus = info.iter().map(|x| x.tpu.clone()).collect();
+            let tpus: Vec<_> = info
+                .iter()
+                .map(|x| x.tpu.clone())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            let tpu_ips: Vec<_> = tpus
+                .iter()
+                .filter_map(|x| x.split(':').next())
+                .map(|x| x.to_string())
+                .collect();
             let result = tx_consumer
                 .tx
                 .send(Ok(build_tx_message_envelope(
@@ -211,13 +243,25 @@ impl Balancer {
                 .await;
             let _span = span.enter();
             match result {
-                Ok(_) => info!("forwarded to {} # {info_json}", tx_consumer.identity),
+                Ok(_) => {
+                    info!("forwarded to {} # {info_json}", tx_consumer.identity);
+                    session.consumers.push(tx_consumer.identity.clone());
+                    for tpu_ip in tpu_ips {
+                        session.tpu_ips.insert(tpu_ip);
+                    }
+                }
                 Err(err) => {
                     error!("Client disconnected {} {}", tx_consumer.identity, err);
                     tx_consumer.do_unsubscribe.store(true, Ordering::Relaxed);
                 }
             };
         }
+
+        if let Err(err) = self.watcher_inbox.send(session) {
+            let _span = span.enter();
+            error!("Failed to propagate signature to the watcher: {}", err);
+        }
+
         Ok(())
     }
 
@@ -228,6 +272,21 @@ impl Balancer {
     ) {
         self.leader_tpus = leader_tpus;
         self.leaders = leaders;
+    }
+
+    pub fn update_rtt(
+        &mut self,
+        identity: &str,
+        value: pb::Rtt,
+    ) {
+        let slot = self.rtt_values
+            .entry(identity.to_string())
+            .or_default()
+            .entry(value.ip)
+            .or_default();
+        let n = slot.n + 1;
+        slot.rtt = (slot.n * slot.rtt + value.rtt) / n;
+        slot.n = n;
     }
 
     pub fn flush_unsubscribes(&mut self) {

@@ -102,17 +102,12 @@ fn setup_panic_hook() {
     }));
 }
 
-#[tokio::main]
-async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    setup_panic_hook();
-
-    let params = Params::from_args();
-
+fn setup_tracing(debug: bool) {
     LogTracer::init().expect("Setting up log compatibility failed");
     let subscriber = tracing_subscriber::fmt::Subscriber::builder()
         .with_target(false)
         .with_writer(std::io::stderr)
-        .with_max_level(if params.debug.unwrap_or(false) {
+        .with_max_level(if debug {
             tracing::Level::DEBUG
         } else {
             tracing::Level::INFO
@@ -120,17 +115,22 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .compact()
         .finish();
     tracing::subscriber::set_global_default(subscriber).unwrap();
+}
 
+#[tokio::main]
+async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    setup_panic_hook();
+
+    let params = Params::from_args();
+
+    setup_tracing(params.debug.unwrap_or(false));
+ 
     let client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
-    let balancer = Arc::new(RwLock::new(Balancer::default()));
-
-    let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
-
-    balancer_updater(balancer.clone(), client.clone(), pubsub_client.clone());
-
-    metrics::spawn(params.metrics_addr.parse().unwrap());
-
     let tx_signatures = spawn_tx_signature_watcher(client.clone()).unwrap();
+    let balancer = Arc::new(RwLock::new(Balancer::new(tx_signatures)));
+    let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
+    balancer_updater(balancer.clone(), client.clone(), pubsub_client.clone());
+    metrics::spawn(params.metrics_addr.parse().unwrap());
 
     {
         let balancer = balancer.clone();
@@ -185,7 +185,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         params.jwt_public_key,
         params.test_partners,
         balancer.clone(),
-        tx_signatures,
     );
 
     spawn_grpc_server(

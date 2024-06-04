@@ -51,6 +51,11 @@ impl Iterator for Ping {
     }
 }
 
+pub struct RttValue {
+    pub rtt: u64,
+    pub n: u64,
+}
+
 pub fn build_tx_message_envelope(
     signature: String,
     data: String,
@@ -119,16 +124,21 @@ fn handle_client_pong(identity: &String, pong: pb::Pong, last_ping: &Ping) {
     }
 }
 
-fn handle_client_request(
+async fn handle_client_request(
     request_message_envelope: Result<RequestMessageEnvelope, Status>,
     identity: &String,
     token: &String,
     last_ping: &Ping,
+    balancer: &Arc<RwLock<Balancer>>,
 ) {
     match request_message_envelope {
         Ok(request_message_envelope) => {
             if let Some(metrics) = request_message_envelope.metrics {
                 handle_client_metrics(&identity, &token, metrics);
+            }
+            if let Some(rtt) = request_message_envelope.rtt {
+                let mut balancer = balancer.write().await;
+                balancer.update_rtt(identity, rtt);
             }
             if let Some(pong) = request_message_envelope.pong {
                 handle_client_pong(&identity, pong, last_ping);
@@ -192,7 +202,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
 
                         request_message_envelope = input_stream.next() => {
                             if let Some(request_message_envelope) = request_message_envelope{
-                                handle_client_request(request_message_envelope, &identity, &token, &last_ping);
+                                handle_client_request(request_message_envelope, &identity, &token, &last_ping, &balancer).await;
                             } else {
                                 info!("Stream from client {} ({}) has ended.", &identity, &token);
                                 break
