@@ -220,9 +220,11 @@ async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>)
                 let _span = span.enter();
                 if let Some(known_status) = signature_status {
                     info!(
-                        "new signature status # {{{},\"rtime\":{}}}",
+                        "new signature status # {{{},\"rtime\":{},\"clients\":{},\"tpu_ips\":{}}}",
                         format_status(known_status),
                         record.rtime,
+                        json_str!(&record.consumers),
+                        json_str!(&record.tpu_ips),
                     );
                     match known_status.err {
                         Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS
