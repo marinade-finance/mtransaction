@@ -1,6 +1,7 @@
 use crate::auth::{authenticate, load_public_key, Auth};
-use crate::solana_service::SignatureWrapper;
-use crate::{balancer::*, metrics};
+use crate::solana_service::SignatureRecord;
+use crate::{balancer::*, metrics, time_ms};
+use tracing::Instrument;
 use bincode::config::Options;
 use jsonrpc_core::{BoxFuture, MetaIoHandler, Metadata, Result};
 use jsonrpc_derive::rpc;
@@ -10,10 +11,11 @@ use log::{error, info};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{packet::PACKET_DATA_SIZE, transaction::VersionedTransaction};
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
+use tracing::info_span;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Mode {
     BLACKHOLE,
     FORWARD,
@@ -29,13 +31,14 @@ impl fmt::Display for Mode {
 }
 
 #[derive(Clone)]
-pub struct RpcMetadata {
+pub struct RpcState {
     auth: std::result::Result<Auth, String>,
     balancer: Arc<RwLock<Balancer>>,
-    tx_signatures: UnboundedSender<SignatureWrapper>,
+    tx_signatures: UnboundedSender<SignatureRecord>,
+    req_id: usize,
     mode: Mode,
 }
-impl Metadata for RpcMetadata {}
+impl Metadata for RpcState {}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,7 +75,7 @@ pub trait Rpc {
 #[derive(Default)]
 pub struct RpcServer;
 impl Rpc for RpcServer {
-    type Metadata = RpcMetadata;
+    type Metadata = RpcState;
 
     fn send_priority_transaction(
         &self,
@@ -80,6 +83,17 @@ impl Rpc for RpcServer {
         data: String,
         config: Option<SendPriorityTransactionConfig>,
     ) -> BoxFuture<Result<String>> {
+        let req_id = meta.req_id;
+        let ctime = time_ms();
+        let span = info_span!(
+            "send_priority_transaction",
+            req_id = req_id,
+            ctime = ctime,
+            partner_name = meta.auth.clone()
+                .map(|x| x.to_string())
+                .unwrap_or_else(|_| "UNAUTHORIZED".to_string()),
+            mode = meta.mode.to_string(),
+        );
         let auth = match meta.auth {
             Ok(auth) => auth,
             Err(err) => {
@@ -90,9 +104,17 @@ impl Rpc for RpcServer {
                         message: "Failed to authenticate".into(),
                         data: None,
                     })
-                });
+                }.instrument(span));
             }
         };
+
+        let span = info_span!(
+            "send_priority_transaction",
+            req_id = req_id,
+            ctime = ctime,
+            partner_name = auth.to_string(),
+            mode = meta.mode.to_string(),
+        );
 
         match config {
             Some(config) => match config.skip_preflight {
@@ -104,7 +126,7 @@ impl Rpc for RpcServer {
                                 message: "skipPreflight must be true".into(),
                                 data: None,
                             })
-                        });
+                        }.instrument(span));
                     }
 
                     info!("Skipping preflight checks");
@@ -116,7 +138,7 @@ impl Rpc for RpcServer {
                             message: "skipPreflight is mandatory".into(),
                             data: None,
                         })
-                    });
+                    }.instrument(span));
                 }
             },
             None => {
@@ -126,11 +148,11 @@ impl Rpc for RpcServer {
                         message: "config options are mandatory".into(),
                         data: None,
                     })
-                });
+                }.instrument(span));
             }
         }
 
-        info!("RPC method sendPriorityTransaction called: {:?}", auth);
+        span.in_scope(|| info!("RPC method sendPriorityTransaction called"));
         metrics::SERVER_RPC_TX_ACCEPTED
             .with_label_values(&[&auth.to_string(), &meta.mode.to_string()])
             .inc();
@@ -158,31 +180,39 @@ impl Rpc for RpcServer {
                             message: "Failed to get the transaction's signature".into(),
                             data: None,
                         })
-                    });
+                    }.instrument(span));
                 }
             }
-            Err(err) => return Box::pin(async move { Err(err) }),
+            Err(err) => return Box::pin(async move { Err(err) }.instrument(span)),
         };
 
-        if let Err(err) = meta.tx_signatures.send(SignatureWrapper {
+        let session_info = SignatureRecord {
+            created_at: tokio::time::Instant::now(),
+            span: span.clone(),
+            req_id,
+            ctime,
+            rtime: time_ms(),
             signature: signature.clone(),
             partner_name: auth.to_string(),
             mode: meta.mode.clone(),
-        }) {
+        };
+        if let Err(err) = meta.tx_signatures.send(session_info.clone()) {
+            let _span = span.enter();
             error!("Failed to propagate signature to the watcher: {}", err);
         }
 
         if meta.mode == Mode::BLACKHOLE {
-            info!("Transaction blackholed: {}", signature.to_string());
-            return Box::pin(async move { Ok(signature.to_string()) });
+            span.in_scope(|| info!("Transaction blackholed: {}", signature.to_string()));
+            return Box::pin(async move { Ok(signature.to_string()) }.instrument(span));
         }
 
+        let span_ = span.clone();
         Box::pin(async move {
             match meta
                 .balancer
                 .read()
                 .await
-                .publish(signature.to_string(), data)
+                .publish(span_, signature.to_string(), data)
                 .await
             {
                 Ok(_) => Ok(signature.to_string()),
@@ -192,7 +222,7 @@ impl Rpc for RpcServer {
                     data: None,
                 }),
             }
-        })
+        }.instrument(span.clone()))
     }
 
     fn send_transaction(
@@ -222,7 +252,7 @@ impl Rpc for RpcServer {
     }
 }
 
-pub fn get_io_handler() -> MetaIoHandler<RpcMetadata> {
+pub fn get_io_handler() -> MetaIoHandler<RpcState> {
     let mut io = MetaIoHandler::default();
     io.extend_with(RpcServer::default().to_delegate());
 
@@ -249,7 +279,7 @@ pub fn spawn_rpc_server(
     jwt_public_key_path: Option<String>,
     test_partners: Option<Vec<String>>,
     balancer: Arc<RwLock<Balancer>>,
-    tx_signatures: UnboundedSender<SignatureWrapper>,
+    tx_signatures: UnboundedSender<SignatureRecord>,
 ) -> Server {
     info!("Spawning RPC server.");
 
@@ -260,6 +290,7 @@ pub fn spawn_rpc_server(
         )
     });
     let partners = test_partners.unwrap_or_default();
+    let req_id_gen = AtomicUsize::default();
 
     ServerBuilder::with_meta_extractor(
         get_io_handler(),
@@ -287,10 +318,11 @@ pub fn spawn_rpc_server(
                 (Ok(Auth::Allow(from)), Mode::FORWARD)
             };
 
-            RpcMetadata {
+            RpcState {
                 auth,
                 balancer: balancer.clone(),
                 tx_signatures: tx_signatures.clone(),
+                req_id: req_id_gen.fetch_add(1, Ordering::Relaxed),
                 mode,
             }
         },
