@@ -9,18 +9,21 @@ use crate::balancer::*;
 use crate::grpc_server::*;
 use crate::rpc_server::*;
 use crate::solana_service::*;
-use env_logger::Env;
 use log::{error, info};
 use solana_client::nonblocking::pubsub_client::PubsubClient;
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::{panic, process};
 use structopt::StructOpt;
 use tokio::sync::RwLock;
+use tracing_log::LogTracer;
 
 pub const N_COPIES: usize = 2;
 pub const N_LEADERS: u64 = 7;
 pub const N_CONSUMERS: usize = 3;
 pub const LEADER_REFRESH_SECONDS: u64 = 3600;
 pub const NODES_REFRESH_SECONDS: u64 = 60;
+pub const GOSSIP_ENTRYPOINT: &str = "entrypoint3.mainnet-beta.solana.com:8001";
 
 #[derive(Debug, StructOpt)]
 struct Params {
@@ -68,23 +71,66 @@ struct Params {
 
     #[structopt(long = "jwt-public-key")]
     jwt_public_key: Option<String>,
+
+    #[structopt(long = "debug")]
+    debug: Option<bool>,
+}
+
+#[inline]
+pub fn time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[macro_export]
+macro_rules! json_str {
+    (
+        $val:expr $(,)?
+    ) => {
+        serde_json::to_string($val).unwrap_or_else(|_| "null".to_string())
+    };
+}
+
+fn setup_panic_hook() {
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        hook(info);
+        error!("panic_hook forcing exit");
+        process::exit(1);
+    }));
+}
+
+fn setup_tracing(debug: bool) {
+    LogTracer::init().expect("Setting up log compatibility failed");
+    let subscriber = tracing_subscriber::fmt::Subscriber::builder()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .with_max_level(if debug {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        })
+        .compact()
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
 }
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    setup_panic_hook();
+
     let params = Params::from_args();
 
+    setup_tracing(params.debug.unwrap_or(false));
+ 
     let client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
-    let balancer = Arc::new(RwLock::new(Balancer::default()));
-
-    let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
-
-    balancer_updater(balancer.clone(), client.clone(), pubsub_client.clone());
-
-    metrics::spawn(params.metrics_addr.parse().unwrap());
-
     let tx_signatures = spawn_tx_signature_watcher(client.clone()).unwrap();
+    let balancer = Arc::new(RwLock::new(Balancer::new(tx_signatures)));
+    let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
+    balancer_updater(balancer.clone(), client.clone(), pubsub_client.clone());
+    metrics::spawn(params.metrics_addr.parse().unwrap());
 
     {
         let balancer = balancer.clone();
@@ -139,7 +185,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         params.jwt_public_key,
         params.test_partners,
         balancer.clone(),
-        tx_signatures,
     );
 
     spawn_grpc_server(

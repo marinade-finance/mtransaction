@@ -11,6 +11,7 @@ service MTransaction {
 message RequestMessageEnvelope {
   Pong pong = 1;
   Metrics metrics = 2;
+  Rtt rtt = 3;
 }
 
 // The response message envelope
@@ -44,4 +45,10 @@ message Metrics {
   string version = 4;
   uint64 quic_forwarder_permits_used_max = 5;
   uint64 memory_physical = 6;
+}
+
+message Rtt {
+  string ip = 1;
+  uint64 rtt = 2;
+  uint64 n = 3;
 }

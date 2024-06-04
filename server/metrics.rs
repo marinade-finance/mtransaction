@@ -50,10 +50,34 @@ lazy_static! {
         &["partner", "mode"]
     )
     .unwrap();
+    pub static ref CHAIN_TX_FINALIZED_BY_CONSUMER: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_finalized_by_consumer",
+        "How many transactions finalized submitted through consumer",
+        &["consumer"]
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_FINALIZED_BY_TPU_IP: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_finalized_by_tpu_ip",
+        "How many transactions finalized submitted through a specific tpu ip",
+        &["tpu_ip"]
+    )
+    .unwrap();
     pub static ref CHAIN_TX_TIMEOUT: IntGaugeVec = register_int_gauge_vec!(
         "mtx_chain_tx_timeout",
         "How many transactions we were unable to confirm as finalized",
         &["partner", "mode"]
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_TIMEOUT_BY_CONSUMER: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_timeout_by_consumer",
+        "How many transactions timed out submitted through consumer",
+        &["consumer"]
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_TIMEOUT_BY_TPU_IP: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_timeout_by_tpu_ip",
+        "How many transactions timed out submitted through a specific tpu ip",
+        &["tpu_ip"]
     )
     .unwrap();
     pub static ref CHAIN_TX_EXECUTION_SUCCESS: IntGaugeVec = register_int_gauge_vec!(
