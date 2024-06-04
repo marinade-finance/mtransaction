@@ -1,4 +1,4 @@
-use crate::{metrics, rpc_server::Mode};
+use crate::{metrics, rpc_server::Mode, json_str};
 use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
 use eyre::bail;
 use eyre::Result;
@@ -11,6 +11,7 @@ use solana_client::{
 use solana_sdk::{
     commitment_config::CommitmentConfig, native_token::LAMPORTS_PER_SOL, signature::Signature,
 };
+use solana_transaction_status::TransactionStatus;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error,
@@ -127,9 +128,11 @@ pub fn leaders_stream(
     Ok(rx)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SignatureRecord {
+    #[serde(skip)]
     pub span: tracing::Span,
+    #[serde(skip)]
     pub created_at: tokio::time::Instant,
     pub ctime: u64,
     pub rtime: u64,
@@ -174,7 +177,7 @@ pub fn spawn_tx_signature_watcher(
                         {
                             let bundle: Vec<_> = signature_queue.drain(0..to_be_bundled_count).collect();
 
-                            spawn_signature_checker(client.clone(), bundle);
+                            tokio::spawn(signature_checker(client.clone(), bundle));
                         }
                     }
                 },
@@ -195,56 +198,66 @@ pub fn spawn_tx_signature_watcher(
     Ok(tx_signature)
 }
 
-fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>) {
-    tokio::spawn(async move {
-        match client.get_signature_statuses(&bundle.iter().map(|f| f.signature).collect::<Vec<_>>())
-        {
-            Ok(response) => {
-                for (record, signature_status) in bundle.iter().zip(response.value.iter()) {
-                    let span = record.span.clone();
-                    let _span = span.enter();
-                    if let Some(known_status) = signature_status {
-                        info!(
-                            "Signature status {:?} | Partner: {:?} | Mode: {:?}",
-                            known_status,
-                            record.partner_name,
-                            record.mode.to_string()
-                        );
-                        match known_status.err {
-                            Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS
-                                .with_label_values(&[
-                                    &record.partner_name,
-                                    &record.mode.to_string(),
-                                ])
-                                .inc(),
-                            _ => metrics::CHAIN_TX_EXECUTION_SUCCESS
-                                .with_label_values(&[
-                                    &record.partner_name,
-                                    &record.mode.to_string(),
-                                ])
-                                .inc(),
-                        };
-                        metrics::CHAIN_TX_FINALIZED
-                            .with_label_values(&[&record.partner_name, &record.mode.to_string()])
-                            .inc();
-                    } else {
-                        metrics::CHAIN_TX_TIMEOUT
-                            .with_label_values(&[&record.partner_name, &record.mode.to_string()])
-                            .inc();
-                    }
-                }
-            }
-            Err(err) => {
-                for tx in bundle {
-                    let _span = tx.span.enter();
-                    error!("Failed to get signature status: {}", err);
+fn format_status(status: &TransactionStatus) -> String {
+    let slot = &status.slot;
+    let confirmations = match &status.confirmations {
+        Some(value) => value.to_string(),
+        None => "null".to_string(),
+    };
+    let status = match &status.status {
+        Ok(()) => "ok".to_string(),
+        Err(err) => json_str!(&format!("{}", err)),
+    };
+    format!("\"slot\":{slot},\"confirmations\":{confirmations},\"status\":\"{status}\"")
+}
+
+async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>) {
+    match client.get_signature_statuses(&bundle.iter().map(|f| f.signature).collect::<Vec<_>>())
+    {
+        Ok(response) => {
+            for (record, signature_status) in bundle.iter().zip(response.value.iter()) {
+                let span = record.span.clone();
+                let _span = span.enter();
+                if let Some(known_status) = signature_status {
+                    info!(
+                        "new signature status # {{{},\"rtime\":{}}}",
+                        format_status(known_status),
+                        record.rtime,
+                    );
+                    match known_status.err {
+                        Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS
+                            .with_label_values(&[
+                                &record.partner_name,
+                                &record.mode.to_string(),
+                            ])
+                            .inc(),
+                        _ => metrics::CHAIN_TX_EXECUTION_SUCCESS
+                            .with_label_values(&[
+                                &record.partner_name,
+                                &record.mode.to_string(),
+                            ])
+                            .inc(),
+                    };
+                    metrics::CHAIN_TX_FINALIZED
+                        .with_label_values(&[&record.partner_name, &record.mode.to_string()])
+                        .inc();
+                } else {
                     metrics::CHAIN_TX_TIMEOUT
-                        .with_label_values(&[&tx.partner_name, &tx.mode.to_string()])
+                        .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                         .inc();
                 }
             }
         }
-    });
+        Err(err) => {
+            for tx in bundle {
+                let _span = tx.span.enter();
+                error!("Failed to get signature status: {}", err);
+                metrics::CHAIN_TX_TIMEOUT
+                    .with_label_values(&[&tx.partner_name, &tx.mode.to_string()])
+                    .inc();
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]

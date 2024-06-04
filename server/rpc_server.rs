@@ -1,6 +1,7 @@
 use crate::auth::{authenticate, load_public_key, Auth};
 use crate::solana_service::SignatureRecord;
 use crate::{balancer::*, metrics, time_ms};
+use tracing::Instrument;
 use bincode::config::Options;
 use jsonrpc_core::{BoxFuture, MetaIoHandler, Metadata, Result};
 use jsonrpc_derive::rpc;
@@ -10,18 +11,11 @@ use log::{error, info};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{packet::PACKET_DATA_SIZE, transaction::VersionedTransaction};
-use std::{
-    fmt,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-};
+use std::{fmt, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
 use tokio::sync::{mpsc::UnboundedSender, RwLock};
 use tracing::info_span;
-use tracing::Instrument;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Mode {
     BLACKHOLE,
     FORWARD,
@@ -95,9 +89,7 @@ impl Rpc for RpcServer {
             "send_priority_transaction",
             req_id = req_id,
             ctime = ctime,
-            partner_name = meta
-                .auth
-                .clone()
+            partner_name = meta.auth.clone()
                 .map(|x| x.to_string())
                 .unwrap_or_else(|_| "UNAUTHORIZED".to_string()),
             mode = meta.mode.to_string(),
@@ -106,16 +98,13 @@ impl Rpc for RpcServer {
             Ok(auth) => auth,
             Err(err) => {
                 error!("Authentication error: {}", err);
-                return Box::pin(
-                    async move {
-                        Err(jsonrpc_core::error::Error {
-                            code: jsonrpc_core::error::ErrorCode::ServerError(403),
-                            message: "Failed to authenticate".into(),
-                            data: None,
-                        })
-                    }
-                    .instrument(span),
-                );
+                return Box::pin(async move {
+                    Err(jsonrpc_core::error::Error {
+                        code: jsonrpc_core::error::ErrorCode::ServerError(403),
+                        message: "Failed to authenticate".into(),
+                        data: None,
+                    })
+                }.instrument(span));
             }
         };
 
@@ -131,44 +120,35 @@ impl Rpc for RpcServer {
             Some(config) => match config.skip_preflight {
                 Some(skip_preflight) => {
                     if !skip_preflight {
-                        return Box::pin(
-                            async move {
-                                Err(jsonrpc_core::error::Error {
-                                    code: jsonrpc_core::error::ErrorCode::InvalidParams,
-                                    message: "skipPreflight must be true".into(),
-                                    data: None,
-                                })
-                            }
-                            .instrument(span),
-                        );
+                        return Box::pin(async move {
+                            Err(jsonrpc_core::error::Error {
+                                code: jsonrpc_core::error::ErrorCode::InvalidParams,
+                                message: "skipPreflight must be true".into(),
+                                data: None,
+                            })
+                        }.instrument(span));
                     }
 
                     info!("Skipping preflight checks");
                 }
                 None => {
-                    return Box::pin(
-                        async move {
-                            Err(jsonrpc_core::error::Error {
-                                code: jsonrpc_core::error::ErrorCode::InvalidParams,
-                                message: "skipPreflight is mandatory".into(),
-                                data: None,
-                            })
-                        }
-                        .instrument(span),
-                    );
+                    return Box::pin(async move {
+                        Err(jsonrpc_core::error::Error {
+                            code: jsonrpc_core::error::ErrorCode::InvalidParams,
+                            message: "skipPreflight is mandatory".into(),
+                            data: None,
+                        })
+                    }.instrument(span));
                 }
             },
             None => {
-                return Box::pin(
-                    async move {
-                        Err(jsonrpc_core::error::Error {
-                            code: jsonrpc_core::error::ErrorCode::InvalidParams,
-                            message: "config options are mandatory".into(),
-                            data: None,
-                        })
-                    }
-                    .instrument(span),
-                );
+                return Box::pin(async move {
+                    Err(jsonrpc_core::error::Error {
+                        code: jsonrpc_core::error::ErrorCode::InvalidParams,
+                        message: "config options are mandatory".into(),
+                        data: None,
+                    })
+                }.instrument(span));
             }
         }
 
@@ -194,16 +174,13 @@ impl Rpc for RpcServer {
                 if let Some(signature) = decoded.signatures.get(0) {
                     signature.clone()
                 } else {
-                    return Box::pin(
-                        async move {
-                            Err(jsonrpc_core::error::Error {
-                                code: jsonrpc_core::error::ErrorCode::InternalError,
-                                message: "Failed to get the transaction's signature".into(),
-                                data: None,
-                            })
-                        }
-                        .instrument(span),
-                    );
+                    return Box::pin(async move {
+                        Err(jsonrpc_core::error::Error {
+                            code: jsonrpc_core::error::ErrorCode::InternalError,
+                            message: "Failed to get the transaction's signature".into(),
+                            data: None,
+                        })
+                    }.instrument(span));
                 }
             }
             Err(err) => return Box::pin(async move { Err(err) }.instrument(span)),
@@ -214,7 +191,7 @@ impl Rpc for RpcServer {
             span: span.clone(),
             req_id,
             ctime,
-            rtime: ctime,
+            rtime: time_ms(),
             signature: signature.clone(),
             partner_name: auth.to_string(),
             mode: meta.mode.clone(),
@@ -230,25 +207,22 @@ impl Rpc for RpcServer {
         }
 
         let span_ = span.clone();
-        Box::pin(
-            async move {
-                match meta
-                    .balancer
-                    .read()
-                    .await
-                    .publish(span_, signature.to_string(), data)
-                    .await
-                {
-                    Ok(_) => Ok(signature.to_string()),
-                    Err(_) => Err(jsonrpc_core::error::Error {
-                        code: jsonrpc_core::error::ErrorCode::InternalError,
-                        message: "Failed to forward the transaction".into(),
-                        data: None,
-                    }),
-                }
+        Box::pin(async move {
+            match meta
+                .balancer
+                .read()
+                .await
+                .publish(span_, signature.to_string(), data)
+                .await
+            {
+                Ok(_) => Ok(signature.to_string()),
+                Err(_) => Err(jsonrpc_core::error::Error {
+                    code: jsonrpc_core::error::ErrorCode::InternalError,
+                    message: "Failed to forward the transaction".into(),
+                    data: None,
+                }),
             }
-            .instrument(span.clone()),
-        )
+        }.instrument(span.clone()))
     }
 
     fn send_transaction(
