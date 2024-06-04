@@ -13,6 +13,7 @@ use env_logger::Env;
 use log::{error, info};
 use solana_client::nonblocking::pubsub_client::PubsubClient;
 use std::sync::Arc;
+use std::{panic, process};
 use structopt::StructOpt;
 use tokio::sync::RwLock;
 
@@ -21,6 +22,7 @@ pub const N_LEADERS: u64 = 7;
 pub const N_CONSUMERS: usize = 3;
 pub const LEADER_REFRESH_SECONDS: u64 = 3600;
 pub const NODES_REFRESH_SECONDS: u64 = 60;
+pub const GOSSIP_ENTRYPOINT: &str = "entrypoint3.mainnet-beta.solana.com:8001";
 
 #[derive(Debug, StructOpt)]
 struct Params {
@@ -70,8 +72,28 @@ struct Params {
     jwt_public_key: Option<String>,
 }
 
+#[macro_export]
+macro_rules! json_str {
+    (
+        $val:expr $(,)?
+    ) => {
+        serde_json::to_string($val).unwrap_or_else(|_| "null".to_string())
+    };
+}
+
+fn setup_panic_hook() {
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        hook(info);
+        error!("panic_hook forcing exit");
+        process::exit(1);
+    }));
+}
+
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    setup_panic_hook();
+
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     let params = Params::from_args();
 

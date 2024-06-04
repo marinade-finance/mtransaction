@@ -1,6 +1,9 @@
 use crate::{metrics, rpc_server::Mode};
 use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
+use eyre::bail;
+use eyre::Result;
 use log::{debug, error, info};
+use serde::{Deserialize, Serialize};
 use solana_client::{
     nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient,
     rpc_response::RpcVoteAccountStatus,
@@ -263,4 +266,104 @@ fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureWrapper>
             }
         }
     });
+}
+
+#[derive(Deserialize)]
+struct JitoValidatorResponse {
+    validators: Vec<JitoValidatorRecord>,
+}
+
+#[derive(Deserialize)]
+struct JitoValidatorRecord {
+    vote_account: String,
+    running_jito: bool,
+}
+
+async fn fetch_jito_validators() -> Result<HashSet<String>> {
+    let url = "https://kobe.mainnet.jito.network/api/v1/validators";
+    let resp = reqwest::get(url).await?.text().await?;
+    let data: JitoValidatorResponse = serde_json::from_str(&resp)?;
+    let mut result = HashSet::default();
+    for entry in data.validators {
+        if entry.running_jito {
+            result.insert(entry.vote_account);
+        }
+    }
+    Ok(result)
+}
+
+#[derive(Deserialize)]
+struct ValidatorResponse {
+    validators: Vec<ValidatorRecord>,
+}
+
+#[derive(Deserialize)]
+struct ValidatorRecord {
+    identity: String,
+    vote_account: String,
+    pub dc_full_city: String,
+}
+
+async fn fetch_validator_records() -> Result<HashMap<String, ValidatorRecord>> {
+    let url = "http://validators-api.marinade.finance/validators?limit=9999&epochs=0";
+    let resp = reqwest::get(url).await?.text().await?;
+    let data: ValidatorResponse = serde_json::from_str(&resp)?;
+    let mut result = HashMap::default();
+    for entry in data.validators {
+        result.insert(entry.identity.clone(), entry);
+    }
+    Ok(result)
+}
+
+#[derive(Clone, Serialize, Debug)]
+pub struct LeaderInfo {
+    pub identity: String,
+    pub tpu: String,
+    pub dc_full_city: String,
+    pub is_jito: bool,
+}
+
+pub async fn get_leader_info(client: &RpcClient) -> eyre::Result<HashMap<String, LeaderInfo>> {
+    let tpus = match get_tpu_by_identity(client) {
+        Ok(result) => {
+            info!("updated TPUs by identity # {{\"count\":{}}}", result.len());
+            result
+        }
+        Err(err) => bail!("Failed to update TPUs by identity: {}", err),
+    };
+    let validator_records = match fetch_validator_records().await {
+        Ok(value) => value,
+        Err(err) => bail!("Failed to fetch validator records: {}", err),
+    };
+    let jito_identities = match fetch_jito_validators().await {
+        Ok(value) => value,
+        Err(err) => bail!("Failed to fetch Jito validators: {}", err),
+    };
+
+    Ok(merge_validator_records(
+        tpus,
+        validator_records,
+        jito_identities,
+    ))
+}
+
+fn merge_validator_records(
+    tpus: HashMap<String, String>,
+    validator_records: HashMap<String, ValidatorRecord>,
+    jito_identities: HashSet<String>,
+) -> HashMap<String, LeaderInfo> {
+    let mut result: HashMap<String, LeaderInfo> = HashMap::default();
+    for (identity, tpu) in tpus.into_iter() {
+        validator_records.get(&identity).map(|record| {
+            let is_jito = jito_identities.get(&record.vote_account).is_some();
+            let info = LeaderInfo {
+                identity: identity.clone(),
+                tpu,
+                dc_full_city: record.dc_full_city.clone(),
+                is_jito,
+            };
+            result.insert(identity, info);
+        });
+    }
+    result
 }
