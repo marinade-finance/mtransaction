@@ -351,6 +351,21 @@ impl Balancer {
         }
     }
 
+    pub fn update_success(&mut self, identity: &str, tpu_ip: &str, success: bool) {
+        let slot = self
+            .values
+            .entry(identity.to_string())
+            .or_default()
+            .entry(tpu_ip.to_string())
+            .or_default();
+        if success {
+            slot.success.total += 1.0;
+        }
+        slot.success.count += 1.0;
+        let slot_str = format!("\"total\":{},\"count\":{}", slot.success.total, slot.success.count);
+        info!("balancer success values updated # {{\"ip\":\"{}\",{slot_str}}}", tpu_ip);
+    }
+
     pub fn update_rtt(&mut self, identity: &str, value: pb::Rtt) {
         let slot = self
             .values

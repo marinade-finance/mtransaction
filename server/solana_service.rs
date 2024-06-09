@@ -1,5 +1,6 @@
-use crate::{json_str, metrics, rpc_server::Mode};
+use crate::{json_str, metrics, rpc_server::Mode, Balancer};
 use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
+use tokio::sync::RwLock;
 use eyre::bail;
 use eyre::Result;
 use log::{debug, error, info};
@@ -18,8 +19,8 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio_stream::StreamExt;
 
 const SLOTS_PER_EPOCH: u64 = 432000;
 
@@ -144,13 +145,11 @@ pub struct SignatureRecord {
     pub partner_name: String,
 }
 
-pub fn spawn_tx_signature_watcher(
+pub async fn tx_signature_watcher_loop(
+    mut rx: UnboundedReceiver<SignatureRecord>,
     client: Arc<RpcClient>,
-) -> Result<UnboundedSender<SignatureRecord>, Box<dyn Error + Send + Sync>> {
-    let (tx_signature, rx_signature) = unbounded_channel::<SignatureRecord>();
-
-    let mut rx_signature = UnboundedReceiverStream::new(rx_signature);
-
+    balancer: Arc<RwLock<Balancer>>,
+) {
     let mut bundle_subscriptions_signal = Box::pin(
         tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(1)),
     );
@@ -158,46 +157,40 @@ pub fn spawn_tx_signature_watcher(
     let signature_check_after = tokio::time::Duration::from_secs(10);
     let max_bundle_size = 250;
 
-    tokio::spawn(async move {
-        let mut signature_queue: VecDeque<SignatureRecord> = Default::default();
+    let mut signature_queue: VecDeque<SignatureRecord> = Default::default();
 
-        loop {
-            tokio::select! {
-                _ = bundle_subscriptions_signal.next() => {
-                    loop {
-                        let mut to_be_bundled_count = 0;
-                        for record in signature_queue.iter() {
-                            if record.created_at.elapsed() > signature_check_after && to_be_bundled_count < max_bundle_size {
-                                to_be_bundled_count += 1;
-                            } else {
-                                break;
-                            }
-                        }
-                        if to_be_bundled_count == 0 {
+    loop {
+        tokio::select! {
+            _ = bundle_subscriptions_signal.next() => {
+                loop {
+                    let mut to_be_bundled_count = 0;
+                    for record in signature_queue.iter() {
+                        if record.created_at.elapsed() > signature_check_after && to_be_bundled_count < max_bundle_size {
+                            to_be_bundled_count += 1;
+                        } else {
                             break;
                         }
-                        {
-                            let bundle: Vec<_> = signature_queue.drain(0..to_be_bundled_count).collect();
-
-                            tokio::spawn(signature_checker(client.clone(), bundle));
-                        }
                     }
-                },
-                Some(mut record) = rx_signature.next() => {
-                    record.created_at = tokio::time::Instant::now();
-                    let span = record.span.clone();
-                    let _span = span.enter();
-                    info!("Will watch for {}", record.signature);
-                    signature_queue.push_back(record);
-                },
-                else => break,
-            }
+                    if to_be_bundled_count == 0 {
+                        break;
+                    }
+                    {
+                        let bundle: Vec<_> = signature_queue.drain(0..to_be_bundled_count).collect();
+
+                        tokio::spawn(signature_checker(client.clone(), balancer.clone(), bundle));
+                    }
+                }
+            },
+            Some(mut record) = rx.recv() => {
+                record.created_at = tokio::time::Instant::now();
+                let span = record.span.clone();
+                let _span = span.enter();
+                info!("Will watch for {}", record.signature);
+                signature_queue.push_back(record);
+            },
+            else => break,
         }
-
-        Ok::<_, Box<dyn Error + Send + Sync>>(())
-    });
-
-    Ok(tx_signature)
+    }
 }
 
 fn format_status(status: &TransactionStatus) -> String {
@@ -213,12 +206,13 @@ fn format_status(status: &TransactionStatus) -> String {
     format!("\"slot\":{slot},\"confirmations\":{confirmations},\"status\":\"{status}\"")
 }
 
-async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>) {
+async fn signature_checker(client: Arc<RpcClient>, balancer: Arc<RwLock<Balancer>>, bundle: Vec<SignatureRecord>) {
     match client.get_signature_statuses(&bundle.iter().map(|f| f.signature).collect::<Vec<_>>()) {
         Ok(response) => {
             for (record, signature_status) in bundle.iter().zip(response.value.iter()) {
                 let span = record.span.clone();
                 let _span = span.enter();
+                let mut success = false;
                 if let Some(known_status) = signature_status {
                     info!(
                         "new signature status # {{{},\"rtime\":{},\"clients\":{},\"tpu_ips\":{}}}",
@@ -231,7 +225,7 @@ async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>)
                         Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS
                             .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                             .inc(),
-                        _ => metrics::CHAIN_TX_EXECUTION_SUCCESS
+                        _ => metrics::CHAIN_TX_EXECUTION_ERROR
                             .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                             .inc(),
                     };
@@ -248,10 +242,17 @@ async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>)
                             .with_label_values(&[&tpu_ip])
                             .inc();
                     }
+                    success = true;
                 } else {
                     metrics::CHAIN_TX_TIMEOUT
                         .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                         .inc();
+                };
+                let mut lock = balancer.write().await;
+                for consumer in &record.consumers {
+                    for tpu_ip in &record.tpu_ips {
+                        lock.update_success(consumer, tpu_ip, success);
+                    }
                 }
             }
         }

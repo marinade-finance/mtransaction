@@ -93,9 +93,11 @@ lazy_static! {
         &["partner", "mode"]
     )
     .unwrap();
-    pub static ref CHAIN_TX_EXECUTION_ERROR: IntCounter = register_int_counter!(
+    pub static ref CHAIN_TX_EXECUTION_ERROR: IntGaugeVec = register_int_gauge_vec!(
         "mtx_chain_tx_execution_error",
-        "How many transactions ended on chain with errors"
+        "How many transactions ended on chain with errors",
+        &["partner", "mode"]
+           
     )
     .unwrap();
     pub static ref SERVER_RPC_TX_ACCEPTED: IntGaugeVec = register_int_gauge_vec!(
