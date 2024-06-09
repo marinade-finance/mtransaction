@@ -37,7 +37,7 @@ impl Forwarder for RpcForwarder {
             .inc();
         metrics::TX_RECEIVED_LATENCY
             .with_label_values(&[source.as_str()])
-            .add((tx.ctime - time_ms()).try_into().unwrap_or(0));
+            .add((time_ms().max(tx.ctime) - tx.ctime).try_into().unwrap_or(0));
         let rpc_client = self.rpc_client.clone();
         let throttle_parallel = self.throttle_parallel.clone();
         tokio::spawn(async move {

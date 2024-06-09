@@ -91,7 +91,7 @@ impl Forwarder for QuicForwarder {
             .inc();
         metrics::TX_RECEIVED_LATENCY
             .with_label_values(&[source.as_str()])
-            .add((tx.ctime - time_ms()).try_into().unwrap_or(0));
+            .add((time_ms().max(tx.ctime) - tx.ctime).try_into().unwrap_or(0));
         for tpu in transaction.tpu.iter() {
             self.spawn_transaction_forwarder(source.clone(), transaction.clone(), tpu);
         }
