@@ -11,7 +11,6 @@ use pb::{
 use solana_sdk::signature::Keypair;
 use solana_client::connection_cache::ConnectionCache;
 use solana_client::nonblocking::tpu_connection::TpuConnection;
-use solana_client::quic_client::QuicTpuConnection;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
@@ -23,12 +22,6 @@ use tonic::{
 
 async fn tpu_ping(outbox: UnboundedSender<RequestMessageEnvelope>, identity: Arc<Keypair>, tpu: String) {
     info!("tpu_ping spawn ping to {tpu}");
-    // let cert_info = if let (Some(identity), Some(tpu_addr)) = (&identity, tpu_addr) {
-    //         Some((identity, tpu_addr))
-    // let ident = QuicClientCertificateKeypair::new()
-
-    // let endpoint = QuicLazyInitializedEndpoint::new(ident, None);
-    // QuicTpuConnection::new(None, tpu.parse().unwrap(), None);
     let tpu_addr: SocketAddr = match tpu.parse() {
         Ok(value) => value,
         Err(err) => {
@@ -46,14 +39,14 @@ async fn tpu_ping(outbox: UnboundedSender<RequestMessageEnvelope>, identity: Arc
     let conn = connection_cache.get_nonblocking_connection(&tpu_addr);
     let t0 = time_us();
     if let Err(err) = conn.send_data(&[0]).await {
-        error!("tpu_ping failed to send data: {err}");
-        return;
+        error!("tpu_ping failed to measure rtt: {err}");
+        // return;
     };
     let took = time_us() - t0;
 
     let msg = RequestMessageEnvelope {
         rtt: Some(Rtt {
-            ip: tpu,
+            ip: tpu.split(':').next().unwrap_or("").to_string(),
             took,
             n: 1,
         }),

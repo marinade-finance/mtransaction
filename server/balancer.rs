@@ -360,6 +360,8 @@ impl Balancer {
             .or_default();
         slot.rtt.total += value.rtt as f64;
         slot.rtt.count += 1 as f64;
+        let slot_str = format!("\"total\":{},\"count\":{}", slot.rtt.total, slot.rtt.count);
+        info!("balancer rtt values updated # {{\"ip\":\"{}\",{slot_str}}}", value.ip);
         metrics::CLIENT_TPU_IP_PING_RTT
             .with_label_values(&[
                 &identity,

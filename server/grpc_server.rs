@@ -2,7 +2,7 @@ pub mod pb {
     tonic::include_proto!("validator");
 }
 use crate::balancer::*;
-use crate::{metrics, time_us};
+use crate::{metrics, time_ms};
 use futures::Stream;
 use jsonrpc_http_server::*;
 use log::{error, info, warn};
@@ -54,7 +54,7 @@ impl Iterator for Ping {
 pub fn build_tpu_message_envelope(tpu: Vec<String>) -> ResponseMessageEnvelope {
     ResponseMessageEnvelope {
         leader_tpus: Some(pb::Tpu {
-            ctime: time_us(),
+            ctime: time_ms(),
             tpu,
         }),
         ..Default::default()
@@ -68,7 +68,7 @@ pub fn build_tx_message_envelope(
 ) -> ResponseMessageEnvelope {
     ResponseMessageEnvelope {
         timed_transaction: Some(pb::TimedTransaction {
-            ctime: time_us(),
+            ctime: time_ms(),
             signature,
             data,
             tpu,
@@ -143,17 +143,15 @@ async fn handle_client_request(
                 handle_client_metrics(&identity, &token, metrics);
             }
             if let Some(rtt) = request_message_envelope.rtt {
-                let mut balancer = balancer.write().await;
-                balancer.update_rtt(identity, rtt);
+                info!("tx_stream accepted rtt {identity} ({token}): {rtt:?}");
+                let mut lock = balancer.write().await;
+                lock.update_rtt(identity, rtt);
             }
             if let Some(pong) = request_message_envelope.pong {
                 handle_client_pong(&identity, pong, last_ping);
             }
         }
-        Err(err) => error!(
-            "Error receiving message from the client {} ({}): {}",
-            &identity, &token, err
-        ),
+        Err(err) => error!("Error receiving message from the client {identity} ({token}): {err}"),
     };
 }
 
