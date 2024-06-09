@@ -58,7 +58,7 @@ impl QuicForwarder {
             let conn = connection_cache.get_nonblocking_connection(&tpu);
             let start = perf_counter_ns();
             let request_result = conn.send_data(&wire_transaction).await;
-            let took = start - perf_counter_ns();
+            let took = (start - perf_counter_ns()) / 1000;
             metrics::TX_FORWARD_LATENCY
                 .with_label_values(&[&tpu.ip().to_string()])
                 .add(took.try_into().unwrap_or(0));

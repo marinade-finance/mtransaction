@@ -6,7 +6,7 @@ use crate::solana_service::SignatureRecord;
 use crate::solana_service::{get_leader_info, leaders_stream, LeaderInfo};
 use crate::{GOSSIP_ENTRYPOINT, NODES_REFRESH_SECONDS, N_COPIES};
 use jsonrpc_http_server::*;
-use log::{error, info};
+use log::{error, info, warn};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
@@ -16,6 +16,7 @@ use solana_gossip::gossip_service::make_gossip_node;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::keypair;
 use solana_streamer::socket::SocketAddrSpace;
+use serde::Serialize;
 use std::net::ToSocketAddrs;
 use std::str::FromStr;
 use std::{
@@ -51,13 +52,13 @@ impl Drop for TxConsumer {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 struct Values {
     rtt: Proportion,
     success: Proportion,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 struct Proportion {
     count: f64,
     total: f64,
@@ -71,20 +72,6 @@ pub struct Balancer {
     leader_tpus: Vec<LeaderInfo>,
     values: HashMap<String, HashMap<String, Values>>,
     watcher_inbox: UnboundedSender<SignatureRecord>,
-}
-
-pub fn safe_reject_sample(rng: &mut StdRng, density: f64) -> f64 {
-    // beware that the density has to be <= 1.0, otherwise the algorithm produces
-    // bad results
-    for _ in 0..10000 {
-        let rand: f64 = rng.gen();
-        if rand < density {
-            return rand;
-        }
-    }
-    // if the sampling fails, ignore density, but return a sample
-    // this way, the actual density sampled is a mixture
-    rng.gen()
 }
 
 pub async fn publish_tpus_to_consumer(tx_consumer: &TxConsumer, tpus: Vec<String>) {
@@ -150,6 +137,18 @@ impl Balancer {
         }
     }
 
+    pub fn log_consumer_densities(&self) {
+        for consumer in self.tx_consumers.values() {
+            for leader in &self.leader_tpus {
+                // safety: split should always yield at least one element
+                let tpu_ip = leader.tpu.split(':').next().unwrap_or("");
+                let identity = &consumer.identity;
+                let density = self.calculate_consumer_density(&consumer.identity, &leader.tpu);
+                info!("calculate_consumer_density density # {{\"identity\":\"{identity}\",\"tpu_ip\":\"{tpu_ip}\",\"density\":{density}}}");
+            }
+        }
+    }
+
     pub fn calculate_consumer_density(&self, identity: &str, tpu: &str) -> f64 {
         // the density is a number between 0 and 1
         // it dereases linearily with rtt reaching min value 0.01 when rtt is larger than 40ms
@@ -160,20 +159,25 @@ impl Balancer {
         let tpu_ip = match tpu.split(':').next() {
             Some(value) => value,
             None => {
-                return 0.01;
+                return 0.1;
             }
         };
         let values = match self.values.get(identity).and_then(|x| x.get(tpu_ip)) {
             Some(value) => value,
             None => {
-                return 0.01;
+                return 0.1;
             }
         };
                 
         let rtt = values.rtt.total / values.rtt.count;
         let land_ratio = values.success.total / values.success.count;
 
-        ((land_ratio - 0.6).max(0.0) / 0.4 * (40.0 - rtt).max(0.0) / 40.0).max(0.01)
+        let rtt_ratio = (values.rtt.total + 400_000.0) / (values.rtt.count + 10.0) / 60_000.0;
+        let land_ratio = (values.success.total + 10.0) / (values.success.count + 10.0);
+        let bound = (0.1 / (values.rtt.count + 5.0 * values.success.count)).max(0.01);
+
+        // will be always lower than 1.
+        (land_ratio * (1.0 - rtt_ratio)).max(bound)
     }
 
     pub fn select_consumer(&self, stake_point: f64) -> Option<&TxConsumer> {
@@ -198,6 +202,29 @@ impl Balancer {
         None
     }
 
+    pub fn safe_reject_sample(&self, rng: &mut StdRng, leader: &LeaderInfo) -> Option<&TxConsumer> {
+        for i in 0..1000 {
+            let candidate = match self.select_consumer(rng.gen()) {
+                Some(value) => value,
+                // TODO ... this means stake is empty ... should not have to be here
+                None => {
+                    return None;
+                }
+            };
+            let density = self.calculate_consumer_density(&candidate.identity, &leader.tpu);
+            // beware that the density has to be < 1.0, otherwise the
+            // algorithm produces bad results
+            if rng.gen::<f64>() < density {
+                info!("safe_reject_sample took {i} tosses to sample");
+                return Some(candidate);
+            }
+        }
+        // if the sampling fails, ignore density, but return a sample
+        // this way, the actual density sampled is a mixture
+        warn!("safe_reject_sample failed to generate regular sample");
+        self.select_consumer(rng.gen())
+    }
+
     pub fn pick_consumers(&self) -> Vec<(&TxConsumer, Vec<LeaderInfo>)> {
         let mut consumers: HashMap<String, Vec<LeaderInfo>> = HashMap::default();
         let mut rng: StdRng = SeedableRng::from_entropy();
@@ -212,16 +239,7 @@ impl Balancer {
                 }
 
                 // Pick the rest randomly.
-                let candidate = match self.select_consumer(rng.gen()) {
-                    Some(value) => value,
-                    // TODO ... this means stake is empty ... should not have to be here
-                    None => {
-                        continue;
-                    }
-                };
-                let density = self.calculate_consumer_density(&candidate.identity, &leader.tpu);
-                let rand = safe_reject_sample(&mut rng, density);
-                let tx_consumer = match self.select_consumer(rand) {
+                let tx_consumer = match self.safe_reject_sample(&mut rng, &leader) {
                     Some(value) => value,
                     None => {
                         continue;
@@ -276,8 +294,7 @@ impl Balancer {
 
         let tx_consumers = self.pick_consumers();
         if tx_consumers.is_empty() {
-            let _span = span.enter();
-            error!("Dropping tx, no available clients");
+            span.in_scope(|| error!("Dropping tx, no available clients"));
             return Err(format!("No available clients connected").into());
         }
 
@@ -338,6 +355,7 @@ impl Balancer {
         leader_tpus: Vec<LeaderInfo>,
         leaders: HashMap<String, LeaderInfo>,
     ) {
+        self.log_consumer_densities();
         self.leader_tpus = leader_tpus;
         self.leaders = leaders;
     }
