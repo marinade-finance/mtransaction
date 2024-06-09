@@ -2,7 +2,7 @@ pub mod pb {
     tonic::include_proto!("validator");
 }
 use crate::balancer::*;
-use crate::metrics;
+use crate::{metrics, time_ms};
 use futures::Stream;
 use jsonrpc_http_server::*;
 use log::{error, info, warn};
@@ -51,13 +51,24 @@ impl Iterator for Ping {
     }
 }
 
+pub fn build_tpu_message_envelope(tpu: Vec<String>) -> ResponseMessageEnvelope {
+    ResponseMessageEnvelope {
+        leader_tpus: Some(pb::Tpu {
+            ctime: time_ms(),
+            tpu,
+        }),
+        ..Default::default()
+    }
+}
+
 pub fn build_tx_message_envelope(
     signature: String,
     data: String,
     tpu: Vec<String>,
 ) -> ResponseMessageEnvelope {
     ResponseMessageEnvelope {
-        transaction: Some(pb::Transaction {
+        timed_transaction: Some(pb::TimedTransaction {
+            ctime: time_ms(),
             signature,
             data,
             tpu,
@@ -119,25 +130,28 @@ fn handle_client_pong(identity: &String, pong: pb::Pong, last_ping: &Ping) {
     }
 }
 
-fn handle_client_request(
+async fn handle_client_request(
     request_message_envelope: Result<RequestMessageEnvelope, Status>,
     identity: &String,
     token: &String,
     last_ping: &Ping,
+    balancer: &Arc<RwLock<Balancer>>,
 ) {
     match request_message_envelope {
         Ok(request_message_envelope) => {
             if let Some(metrics) = request_message_envelope.metrics {
                 handle_client_metrics(&identity, &token, metrics);
             }
+            if let Some(rtt) = request_message_envelope.rtt {
+                info!("tx_stream accepted rtt {identity} ({token}): {rtt:?}");
+                let mut lock = balancer.write().await;
+                lock.update_rtt(identity, rtt);
+            }
             if let Some(pong) = request_message_envelope.pong {
                 handle_client_pong(&identity, pong, last_ping);
             }
         }
-        Err(err) => error!(
-            "Error receiving message from the client {} ({}): {}",
-            &identity, &token, err
-        ),
+        Err(err) => error!("Error receiving message from the client {identity} ({token}): {err}"),
     };
 }
 
@@ -192,7 +206,7 @@ impl pb::m_transaction_server::MTransaction for MTransactionServer {
 
                         request_message_envelope = input_stream.next() => {
                             if let Some(request_message_envelope) = request_message_envelope{
-                                handle_client_request(request_message_envelope, &identity, &token, &last_ping);
+                                handle_client_request(request_message_envelope, &identity, &token, &last_ping, &balancer).await;
                             } else {
                                 info!("Stream from client {} ({}) has ended.", &identity, &token);
                                 break

@@ -1,8 +1,9 @@
 use lazy_static::lazy_static;
 use log::{info, warn};
 use prometheus::{
-    register_histogram_vec, register_int_counter, register_int_gauge, register_int_gauge_vec,
-    Encoder, HistogramVec, IntCounter, IntGauge, IntGaugeVec, TextEncoder,
+    register_gauge_vec, register_histogram_vec, register_int_counter, register_int_gauge,
+    register_int_gauge_vec, Encoder, GaugeVec, HistogramVec, IntCounter, IntGauge, IntGaugeVec,
+    TextEncoder,
 };
 use warp::Filter;
 
@@ -37,6 +38,12 @@ lazy_static! {
         &["identity"]
     )
     .unwrap();
+    pub static ref CLIENT_TPU_IP_PING_RTT: GaugeVec = register_gauge_vec!(
+        "mtx_client_tpi_ip_ping_rtt",
+        "Latency from the client to a TPU IP",
+        &["identity", "tpu_ip"],
+    )
+    .unwrap();
     pub static ref CLIENT_PING_RTT: HistogramVec = register_histogram_vec!(
         "mtx_client_ping_rtt",
         "Latency to the client based on ping times",
@@ -50,10 +57,34 @@ lazy_static! {
         &["partner", "mode"]
     )
     .unwrap();
+    pub static ref CHAIN_TX_FINALIZED_BY_CONSUMER: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_finalized_by_consumer",
+        "How many transactions finalized submitted through consumer",
+        &["consumer"]
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_FINALIZED_BY_TPU_IP: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_finalized_by_tpu_ip",
+        "How many transactions finalized submitted through a specific tpu ip",
+        &["tpu_ip"]
+    )
+    .unwrap();
     pub static ref CHAIN_TX_TIMEOUT: IntGaugeVec = register_int_gauge_vec!(
         "mtx_chain_tx_timeout",
         "How many transactions we were unable to confirm as finalized",
         &["partner", "mode"]
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_SUBMIT_BY_CONSUMER: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_submit_by_consumer",
+        "How many transactions were submitted through the consumer",
+        &["consumer"]
+    )
+    .unwrap();
+    pub static ref CHAIN_TX_SUBMIT_BY_TPU_IP: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_submit_by_tpu_ip",
+        "How many transactions were submitted through a specific tpu ip",
+        &["tpu_ip"]
     )
     .unwrap();
     pub static ref CHAIN_TX_EXECUTION_SUCCESS: IntGaugeVec = register_int_gauge_vec!(
@@ -62,9 +93,11 @@ lazy_static! {
         &["partner", "mode"]
     )
     .unwrap();
-    pub static ref CHAIN_TX_EXECUTION_ERROR: IntCounter = register_int_counter!(
+    pub static ref CHAIN_TX_EXECUTION_ERROR: IntGaugeVec = register_int_gauge_vec!(
         "mtx_chain_tx_execution_error",
-        "How many transactions ended on chain with errors"
+        "How many transactions ended on chain with errors",
+        &["partner", "mode"]
+           
     )
     .unwrap();
     pub static ref SERVER_RPC_TX_ACCEPTED: IntGaugeVec = register_int_gauge_vec!(
