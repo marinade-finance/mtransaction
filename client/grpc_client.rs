@@ -8,10 +8,12 @@ use pb::{
     m_transaction_client::MTransactionClient, Pong, RequestMessageEnvelope,
     ResponseMessageEnvelope, Rtt, Transaction,
 };
+use solana_sdk::signature::Keypair;
 use solana_client::connection_cache::ConnectionCache;
 use solana_client::nonblocking::tpu_connection::TpuConnection;
 use solana_client::quic_client::QuicTpuConnection;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::StreamExt;
 use tonic::{
@@ -19,7 +21,8 @@ use tonic::{
     Status,
 };
 
-async fn tpu_ping(outbox: UnboundedSender<RequestMessageEnvelope>, tpu: String) {
+async fn tpu_ping(outbox: UnboundedSender<RequestMessageEnvelope>, identity: Arc<Keypair>, tpu: String) {
+    info!("tpu_ping spawn ping to {tpu}");
     // let cert_info = if let (Some(identity), Some(tpu_addr)) = (&identity, tpu_addr) {
     //         Some((identity, tpu_addr))
     // let ident = QuicClientCertificateKeypair::new()
@@ -33,22 +36,19 @@ async fn tpu_ping(outbox: UnboundedSender<RequestMessageEnvelope>, tpu: String) 
             return;
         }
     };
-    let identity = None;
-    let cert_info = if let (Some(identity), tpu_ip) = (&identity, tpu_addr.ip()) {
-        Some((identity, tpu_ip))
-    } else {
-        None
-    };
     let connection_cache = ConnectionCache::new_with_client_options(
         "default connection cache",
         2,
         None,
-        cert_info,
+        Some((&identity, tpu_addr.ip())),
         None,
     );
     let conn = connection_cache.get_nonblocking_connection(&tpu_addr);
     let t0 = time_us();
-    let _ = conn.send_data(&[0]).await;
+    if let Err(err) = conn.send_data(&[0]).await {
+        error!("tpu_ping failed to send data: {err}");
+        return;
+    };
     let took = time_us() - t0;
 
     let msg = RequestMessageEnvelope {
@@ -60,7 +60,7 @@ async fn tpu_ping(outbox: UnboundedSender<RequestMessageEnvelope>, tpu: String) 
         ..Default::default()
     };
     if let Err(err) = outbox.send(msg) {
-        error!("Failed to send rtt stats: {}", err);
+        error!("tpu_ping failed to send rtt stats: {err}");
     }
 }
 
@@ -69,6 +69,7 @@ fn process_upstream_message(
     response: Result<ResponseMessageEnvelope, Status>,
     outbox: UnboundedSender<RequestMessageEnvelope>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
+    identity: Arc<Keypair>,
 ) {
     match response {
         Ok(envelope) => {
@@ -105,7 +106,7 @@ fn process_upstream_message(
                 }
             } else if let Some(tpus) = envelope.leader_tpus {
                 for tpu in tpus.tpu {
-                    tokio::spawn(tpu_ping(outbox.clone(), tpu));
+                    tokio::spawn(tpu_ping(outbox.clone(), identity.clone(), tpu));
                 }
             }
         }
@@ -117,6 +118,7 @@ fn process_upstream_message(
 
 async fn mtx_stream(
     source: String,
+    identity: Arc<Keypair>,
     client: &mut MTransactionClient<Channel>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
     mut metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
@@ -148,7 +150,7 @@ async fn mtx_stream(
 
             response = response_stream.next() => {
                 if let Some(response) = response {
-                    process_upstream_message(source.clone(), response, tx_upstream_transactions.clone(), tx_transactions.clone());
+                    process_upstream_message(source.clone(), response, tx_upstream_transactions.clone(), tx_transactions.clone(), identity.clone());
                 } else {
                     metrics.close();
                     error!("Upstream closed: {:?}", source);
@@ -192,6 +194,7 @@ async fn get_tls_config(
 }
 
 pub async fn spawn_grpc_client(
+    identity: Arc<Keypair>,
     grpc_url: Uri,
     tls_grpc_ca_cert: Option<String>,
     tls_grpc_client_key: Option<String>,
@@ -220,6 +223,7 @@ pub async fn spawn_grpc_client(
 
     mtx_stream(
         grpc_host.unwrap_or("unknown").to_string(),
+        identity,
         &mut client,
         tx_transactions,
         metrics,

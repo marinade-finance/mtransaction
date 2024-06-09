@@ -87,6 +87,22 @@ pub fn safe_reject_sample(rng: &mut StdRng, density: f64) -> f64 {
     rng.gen()
 }
 
+pub async fn publish_tpus_to_consumer(tx_consumer: &TxConsumer, tpus: Vec<String>) {
+    let result = tx_consumer
+        .tx
+        .send(Ok(build_tpu_message_envelope(tpus)))
+        .await;
+    match result {
+        Ok(_) => {
+            info!("notified {} of new leaders", tx_consumer.identity);
+        }
+        Err(err) => {
+            error!("Client disconnected {} {}", tx_consumer.identity, err);
+            tx_consumer.do_unsubscribe.store(true, Ordering::Relaxed);
+        }
+    };
+}
+
 impl Balancer {
     pub fn new(watcher_inbox: UnboundedSender<SignatureRecord>) -> Self {
         Self {
@@ -112,17 +128,15 @@ impl Balancer {
         info!("Subscribing # {{\"identity\":\"{identity}\",\"token\":\"{token}\"}}");
         let (tx, rx) = mpsc::channel(100);
         let (tx_unsubscribe, rx_unsubcribe) = oneshot::channel();
-        self.tx_consumers.insert(
-            identity.clone(),
-            TxConsumer {
-                identity: identity.clone(),
-                stake: *self.stake_weights.get(&identity).unwrap_or(&1),
-                tx: tx.clone(),
-                token,
-                tx_unsubscribe: Some(tx_unsubscribe),
-                do_unsubscribe: false.into(),
-            },
-        );
+        let tx_consumer = TxConsumer {
+            identity: identity.clone(),
+            stake: *self.stake_weights.get(&identity).unwrap_or(&1),
+            tx: tx.clone(),
+            token,
+            tx_unsubscribe: Some(tx_unsubscribe),
+            do_unsubscribe: false.into(),
+        };
+        self.tx_consumers.insert(identity.clone(), tx_consumer);
         self.recalc_total_connected_stake();
         (tx, rx, rx_unsubcribe)
     }
@@ -328,22 +342,12 @@ impl Balancer {
         self.leaders = leaders;
     }
 
-    pub async fn publish_tpus(&self, leader_tpus: Vec<LeaderInfo>) {
-        let tpus: Vec<_> = leader_tpus.into_iter().map(|x| x.tpu).collect();
+    pub async fn publish_tpus(&self, leader_tpus: &Vec<LeaderInfo>) {
+        // TODO ... redesign into an actor so that txs are not blocked if rtt stalls
+        let tpus: HashSet<_> = leader_tpus.iter().map(|x| x.tpu.clone()).collect();
         for tx_consumer in self.tx_consumers.values() {
-            let result = tx_consumer
-                .tx
-                .send(Ok(build_tpu_message_envelope(tpus.clone())))
-                .await;
-            match result {
-                Ok(_) => {
-                    info!("notified {} of new leaders", tx_consumer.identity);
-                }
-                Err(err) => {
-                    error!("Client disconnected {} {}", tx_consumer.identity, err);
-                    tx_consumer.do_unsubscribe.store(true, Ordering::Relaxed);
-                }
-            };
+            let tpus_copy = tpus.iter().cloned().collect();
+            publish_tpus_to_consumer(tx_consumer, tpus_copy).await;
         }
     }
 
@@ -449,6 +453,7 @@ pub fn balancer_updater(
                     info!("new leaders # {}", json_str!(&leaders_info));
                     let leader_values: Vec<_> = leaders_info.values().cloned().collect();
                     let mut lock = balancer.write().await;
+                    lock.publish_tpus(&leader_values).await;
                     lock.set_leaders(leader_values, leaders_info);
                     lock.flush_unsubscribes();
                 },
