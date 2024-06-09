@@ -2,7 +2,7 @@ pub mod pb {
     tonic::include_proto!("validator");
 }
 use crate::balancer::*;
-use crate::metrics;
+use crate::{metrics, time_us};
 use futures::Stream;
 use jsonrpc_http_server::*;
 use log::{error, info, warn};
@@ -51,13 +51,24 @@ impl Iterator for Ping {
     }
 }
 
+pub fn build_tpu_message_envelope(tpu: Vec<String>) -> ResponseMessageEnvelope {
+    ResponseMessageEnvelope {
+        leader_tpus: Some(pb::Tpu {
+            ctime: time_us(),
+            tpu,
+        }),
+        ..Default::default()
+    }
+}
+
 pub fn build_tx_message_envelope(
     signature: String,
     data: String,
     tpu: Vec<String>,
 ) -> ResponseMessageEnvelope {
     ResponseMessageEnvelope {
-        transaction: Some(pb::Transaction {
+        timed_transaction: Some(pb::TimedTransaction {
+            ctime: time_us(),
             signature,
             data,
             tpu,

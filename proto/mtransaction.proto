@@ -18,6 +18,8 @@ message RequestMessageEnvelope {
 message ResponseMessageEnvelope {
   Transaction transaction = 1;
   Ping ping = 2;
+  TimedTransaction timed_transaction = 3;
+  Tpu leader_tpus = 4;
 }
 
 // The response Tx
@@ -25,6 +27,19 @@ message Transaction {
   string data = 1;
   string signature = 2;
   repeated string tpu = 3;
+}
+
+// The response Tx
+message TimedTransaction {
+  uint64 ctime = 1;
+  string data = 2;
+  string signature = 3;
+  repeated string tpu = 4;
+}
+
+message Tpu {
+  uint64 ctime = 1;
+  repeated string tpu = 2;
 }
 
 // The response Ping

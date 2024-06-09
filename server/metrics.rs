@@ -1,8 +1,9 @@
 use lazy_static::lazy_static;
 use log::{info, warn};
 use prometheus::{
-    register_histogram_vec, register_int_counter, register_int_gauge, register_gauge_vec, register_int_gauge_vec,
-    Encoder, HistogramVec, IntCounter, IntGauge, IntGaugeVec, GaugeVec, TextEncoder,
+    register_gauge_vec, register_histogram_vec, register_int_counter, register_int_gauge,
+    register_int_gauge_vec, Encoder, GaugeVec, HistogramVec, IntCounter, IntGauge, IntGaugeVec,
+    TextEncoder,
 };
 use warp::Filter;
 

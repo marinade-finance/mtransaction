@@ -1,6 +1,6 @@
-use crate::forwarder::Forwarder;
-use crate::grpc_client::pb::Transaction;
+use crate::forwarder::{ForwardedTransaction, Forwarder};
 use crate::metrics::{self};
+use crate::time_ms;
 use log::{error, info};
 use serde_json::json;
 use solana_client::{
@@ -29,10 +29,15 @@ impl RpcForwarder {
 }
 
 impl Forwarder for RpcForwarder {
-    fn process(&self, source: String, transaction: Transaction) {
+    fn process(&self, tx: ForwardedTransaction) {
+        let source = tx.source;
+        let transaction = tx.transaction;
         metrics::TX_RECEIVED_COUNT
             .with_label_values(&[source.as_str()])
             .inc();
+        metrics::TX_RECEIVED_LATENCY
+            .with_label_values(&[source.as_str()])
+            .add((tx.ctime - time_ms()).try_into().unwrap_or(0));
         let rpc_client = self.rpc_client.clone();
         let throttle_parallel = self.throttle_parallel.clone();
         tokio::spawn(async move {

@@ -1,4 +1,4 @@
-use crate::{metrics, rpc_server::Mode, json_str};
+use crate::{json_str, metrics, rpc_server::Mode};
 use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
 use eyre::bail;
 use eyre::Result;
@@ -214,8 +214,7 @@ fn format_status(status: &TransactionStatus) -> String {
 }
 
 async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>) {
-    match client.get_signature_statuses(&bundle.iter().map(|f| f.signature).collect::<Vec<_>>())
-    {
+    match client.get_signature_statuses(&bundle.iter().map(|f| f.signature).collect::<Vec<_>>()) {
         Ok(response) => {
             for (record, signature_status) in bundle.iter().zip(response.value.iter()) {
                 let span = record.span.clone();
@@ -230,16 +229,10 @@ async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>)
                     );
                     match known_status.err {
                         Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS
-                            .with_label_values(&[
-                                &record.partner_name,
-                                &record.mode.to_string(),
-                            ])
+                            .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                             .inc(),
                         _ => metrics::CHAIN_TX_EXECUTION_SUCCESS
-                            .with_label_values(&[
-                                &record.partner_name,
-                                &record.mode.to_string(),
-                            ])
+                            .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                             .inc(),
                     };
                     metrics::CHAIN_TX_FINALIZED

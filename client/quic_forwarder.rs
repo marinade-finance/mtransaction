@@ -1,6 +1,6 @@
-use crate::forwarder::Forwarder;
+use crate::forwarder::{ForwardedTransaction, Forwarder};
 use crate::grpc_client::pb::Transaction;
-use crate::metrics;
+use crate::{metrics, perf_counter_ns, time_ms};
 use base64::decode;
 use log::{error, info};
 use solana_client::{
@@ -56,7 +56,12 @@ impl QuicForwarder {
 
             info!("Tx {} -> {}", transaction.signature, &tpu);
             let conn = connection_cache.get_nonblocking_connection(&tpu);
+            let start = perf_counter_ns();
             let request_result = conn.send_data(&wire_transaction).await;
+            let took = start - perf_counter_ns();
+            metrics::TX_FORWARD_LATENCY
+                .with_label_values(&[&tpu.ip().to_string()])
+                .add(took.try_into().unwrap_or(0));
             Self::handle_send_result(source, request_result);
 
             drop(throttle_permit);
@@ -78,10 +83,15 @@ impl QuicForwarder {
 }
 
 impl Forwarder for QuicForwarder {
-    fn process(&self, source: String, transaction: Transaction) {
+    fn process(&self, tx: ForwardedTransaction) {
+        let source = tx.source;
+        let transaction = tx.transaction;
         metrics::TX_RECEIVED_COUNT
             .with_label_values(&[source.as_str()])
             .inc();
+        metrics::TX_RECEIVED_LATENCY
+            .with_label_values(&[source.as_str()])
+            .add((tx.ctime - time_ms()).try_into().unwrap_or(0));
         for tpu in transaction.tpu.iter() {
             self.spawn_transaction_forwarder(source.clone(), transaction.clone(), tpu);
         }

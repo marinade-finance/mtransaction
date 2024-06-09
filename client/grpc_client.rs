@@ -2,11 +2,16 @@ pub mod pb {
     tonic::include_proto!("validator");
 }
 use crate::forwarder::ForwardedTransaction;
+use crate::time_us;
 use log::{error, info, warn};
 use pb::{
-    m_transaction_client::MTransactionClient, Ping, Pong, RequestMessageEnvelope,
-    ResponseMessageEnvelope,
+    m_transaction_client::MTransactionClient, Pong, RequestMessageEnvelope,
+    ResponseMessageEnvelope, Rtt, Transaction,
 };
+use solana_client::connection_cache::ConnectionCache;
+use solana_client::nonblocking::tpu_connection::TpuConnection;
+use solana_client::quic_client::QuicTpuConnection;
+use std::net::SocketAddr;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::StreamExt;
 use tonic::{
@@ -14,44 +19,94 @@ use tonic::{
     Status,
 };
 
-fn process_ping(ping: Ping, tx_upstream_transactions: UnboundedSender<RequestMessageEnvelope>) {
-    info!("Sending pong: {}", ping.id);
-    if let Err(err) = tx_upstream_transactions.send(RequestMessageEnvelope {
-        pong: Some(Pong { id: ping.id }),
-        ..Default::default()
-    }) {
-        error!("Failed to enqueue pong: {}", err);
-    }
-}
+async fn tpu_ping(outbox: UnboundedSender<RequestMessageEnvelope>, tpu: String) {
+    // let cert_info = if let (Some(identity), Some(tpu_addr)) = (&identity, tpu_addr) {
+    //         Some((identity, tpu_addr))
+    // let ident = QuicClientCertificateKeypair::new()
 
-fn process_transaction(
-    transaction: ForwardedTransaction,
-    tx_transactions: UnboundedSender<ForwardedTransaction>,
-) {
-    if let Err(err) = tx_transactions.send(transaction) {
-        error!("Failed to enqueue tx: {}", err);
+    // let endpoint = QuicLazyInitializedEndpoint::new(ident, None);
+    // QuicTpuConnection::new(None, tpu.parse().unwrap(), None);
+    let tpu_addr: SocketAddr = match tpu.parse() {
+        Ok(value) => value,
+        Err(err) => {
+            error!("tpu_ping failed to parse tpu into SocketAddr: {err}");
+            return;
+        }
+    };
+    let identity = None;
+    let cert_info = if let (Some(identity), tpu_ip) = (&identity, tpu_addr.ip()) {
+        Some((identity, tpu_ip))
+    } else {
+        None
+    };
+    let connection_cache = ConnectionCache::new_with_client_options(
+        "default connection cache",
+        2,
+        None,
+        cert_info,
+        None,
+    );
+    let conn = connection_cache.get_nonblocking_connection(&tpu_addr);
+    let t0 = time_us();
+    let _ = conn.send_data(&[0]).await;
+    let took = time_us() - t0;
+
+    let msg = RequestMessageEnvelope {
+        rtt: Some(Rtt {
+            ip: tpu,
+            took,
+            n: 1,
+        }),
+        ..Default::default()
+    };
+    if let Err(err) = outbox.send(msg) {
+        error!("Failed to send rtt stats: {}", err);
     }
 }
 
 fn process_upstream_message(
     source: String,
     response: Result<ResponseMessageEnvelope, Status>,
-    tx_upstream_transactions: UnboundedSender<RequestMessageEnvelope>,
+    outbox: UnboundedSender<RequestMessageEnvelope>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
 ) {
     match response {
-        Ok(response_message_envelope) => {
-            if let Some(ping) = response_message_envelope.ping {
-                process_ping(ping, tx_upstream_transactions);
-            }
-            if let Some(transaction) = response_message_envelope.transaction {
-                process_transaction(
-                    ForwardedTransaction {
-                        source: source,
-                        transaction: transaction,
+        Ok(envelope) => {
+            if let Some(ping) = envelope.ping {
+                info!("Sending pong: {}", ping.id);
+                let msg = RequestMessageEnvelope {
+                    pong: Some(Pong { id: ping.id }),
+                    ..Default::default()
+                };
+                if let Err(err) = outbox.send(msg) {
+                    error!("Failed to enqueue pong: {}", err);
+                }
+            } else if let Some(transaction) = envelope.transaction {
+                let tx = ForwardedTransaction {
+                    ctime: 0,
+                    source,
+                    transaction,
+                };
+                if let Err(err) = tx_transactions.send(tx) {
+                    error!("Failed to enqueue tx: {}", err);
+                }
+            } else if let Some(transaction) = envelope.timed_transaction {
+                let tx = ForwardedTransaction {
+                    ctime: transaction.ctime,
+                    source,
+                    transaction: Transaction {
+                        signature: transaction.signature,
+                        data: transaction.data,
+                        tpu: transaction.tpu,
                     },
-                    tx_transactions,
-                );
+                };
+                if let Err(err) = tx_transactions.send(tx) {
+                    error!("Failed to enqueue tx: {}", err);
+                }
+            } else if let Some(tpus) = envelope.leader_tpus {
+                for tpu in tpus.tpu {
+                    tokio::spawn(tpu_ping(outbox.clone(), tpu));
+                }
             }
         }
         Err(err) => {

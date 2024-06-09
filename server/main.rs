@@ -83,6 +83,14 @@ pub fn time_ms() -> u64 {
         .as_millis() as u64
 }
 
+#[inline]
+pub fn time_us() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as u64
+}
+
 #[macro_export]
 macro_rules! json_str {
     (
@@ -123,7 +131,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let params = Params::from_args();
 
     setup_tracing(params.debug.unwrap_or(false));
- 
+
     let client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
     let tx_signatures = spawn_tx_signature_watcher(client.clone()).unwrap();
     let balancer = Arc::new(RwLock::new(Balancer::new(tx_signatures)));

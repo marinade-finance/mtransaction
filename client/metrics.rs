@@ -3,7 +3,8 @@ use lazy_static::lazy_static;
 use log::error;
 use memory_stats::memory_stats;
 use prometheus::{
-    register_int_counter_vec, register_int_gauge, Encoder, IntCounterVec, IntGauge, TextEncoder,
+    register_int_counter_vec, register_int_gauge, register_int_gauge_vec, Encoder, IntCounterVec,
+    IntGauge, IntGaugeVec, TextEncoder,
 };
 use std::time::Duration;
 use tokio::time::sleep;
@@ -17,6 +18,18 @@ lazy_static! {
     pub static ref TX_RECEIVED_COUNT: IntCounterVec = register_int_counter_vec!(
         "tx_received",
         "How many transactions were received by the client",
+        &["source"],
+    )
+    .unwrap();
+    pub static ref TX_RECEIVED_LATENCY: IntGaugeVec = register_int_gauge_vec!(
+        "tx_receive_latency",
+        "Sum of latency of all received transactions by the client",
+        &["source"],
+    )
+    .unwrap();
+    pub static ref TX_FORWARD_LATENCY: IntGaugeVec = register_int_gauge_vec!(
+        "tx_forward_latency",
+        "Sum of latency of all forwarded transactions by the client",
         &["source"],
     )
     .unwrap();

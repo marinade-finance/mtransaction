@@ -11,8 +11,10 @@ use forwarder::ForwardedTransaction;
 use log::{error, info};
 use signal_hook_tokio::Signals;
 use solana_sdk::signature::read_keypair_file;
+use std::ops::Sub;
 use std::panic;
 use std::process;
+use std::time::{Instant, SystemTime};
 use structopt::StructOpt;
 use tokio::{
     sync::{mpsc::UnboundedSender, RwLock},
@@ -64,6 +66,35 @@ struct Params {
 
     #[structopt(long = "throttle-parallel", default_value = "1000")]
     throttle_parallel: usize,
+}
+
+#[inline]
+pub fn time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[inline]
+pub fn time_us() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as u64
+}
+
+#[derive(Clone, Debug)]
+pub struct PerfCounterNanos(Instant);
+impl Sub for PerfCounterNanos {
+    type Output = u64;
+    fn sub(self, rhs: Self) -> u64 {
+        (self.0 - rhs.0).as_nanos() as u64
+    }
+}
+#[inline]
+pub fn perf_counter_ns() -> PerfCounterNanos {
+    PerfCounterNanos(Instant::now())
 }
 
 fn setup_panic_hook() {

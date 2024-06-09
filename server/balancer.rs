@@ -1,10 +1,10 @@
-use crate::grpc_server::{self, build_tx_message_envelope};
+use crate::grpc_server::pb;
+use crate::grpc_server::{self, build_tpu_message_envelope, build_tx_message_envelope};
 use crate::json_str;
 use crate::metrics;
+use crate::solana_service::SignatureRecord;
 use crate::solana_service::{get_leader_info, leaders_stream, LeaderInfo};
 use crate::{GOSSIP_ENTRYPOINT, NODES_REFRESH_SECONDS, N_COPIES};
-use crate::solana_service::SignatureRecord;
-use crate::grpc_server::pb;
 use jsonrpc_http_server::*;
 use log::{error, info};
 use rand::rngs::StdRng;
@@ -23,11 +23,11 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     sync::Arc,
 };
+use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tonic::Status;
 use tracing::Instrument;
-use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug)]
 pub struct TxMessage {
@@ -76,7 +76,7 @@ pub struct Balancer {
 pub fn safe_reject_sample(rng: &mut StdRng, density: f64) -> f64 {
     // beware that the density has to be <= 1.0, otherwise the algorithm produces
     // bad results
-    for _ in 0..100 {
+    for _ in 0..10000 {
         let rand: f64 = rng.gen();
         if rand < density {
             return rand;
@@ -144,12 +144,16 @@ impl Balancer {
         // all of these should result in sending more transactions through clients where they
         // have a greater chance of landing successfully and quickly
         let tpu_ip = match tpu.split(':').next() {
-            Some(value) => { value }
-            None => { return 0.01; }
+            Some(value) => value,
+            None => {
+                return 0.01;
+            }
         };
         let values = match self.values.get(identity).and_then(|x| x.get(tpu_ip)) {
-            Some(value) => { value }
-            None => { return 0.01; }
+            Some(value) => value,
+            None => {
+                return 0.01;
+            }
         };
                 
         let rtt = values.rtt.total / values.rtt.count;
@@ -195,15 +199,19 @@ impl Balancer {
 
                 // Pick the rest randomly.
                 let candidate = match self.select_consumer(rng.gen()) {
-                    Some(value) => { value }
+                    Some(value) => value,
                     // TODO ... this means stake is empty ... should not have to be here
-                    None => { continue; }
+                    None => {
+                        continue;
+                    }
                 };
                 let density = self.calculate_consumer_density(&candidate.identity, &leader.tpu);
                 let rand = safe_reject_sample(&mut rng, density);
                 let tx_consumer = match self.select_consumer(rand) {
-                    Some(value) => { value }
-                    None => { continue; }
+                    Some(value) => value,
+                    None => {
+                        continue;
+                    }
                 };
                 let entry = consumers.entry(tx_consumer.identity.clone()).or_default();
                 entry.push(leader);
@@ -212,10 +220,11 @@ impl Balancer {
 
         consumers
             .into_iter()
-            .filter_map(
-                |(identity, leaders)|
-                self.tx_consumers.get(&identity).and_then(|x| Some((x, leaders)))
-            )
+            .filter_map(|(identity, leaders)| {
+                self.tx_consumers
+                    .get(&identity)
+                    .and_then(|x| Some((x, leaders)))
+            })
             .collect()
     }
 
@@ -319,12 +328,28 @@ impl Balancer {
         self.leaders = leaders;
     }
 
-    pub fn update_rtt(
-        &mut self,
-        identity: &str,
-        value: pb::Rtt,
-    ) {
-        let slot = self.values
+    pub async fn publish_tpus(&self, leader_tpus: Vec<LeaderInfo>) {
+        let tpus: Vec<_> = leader_tpus.into_iter().map(|x| x.tpu).collect();
+        for tx_consumer in self.tx_consumers.values() {
+            let result = tx_consumer
+                .tx
+                .send(Ok(build_tpu_message_envelope(tpus.clone())))
+                .await;
+            match result {
+                Ok(_) => {
+                    info!("notified {} of new leaders", tx_consumer.identity);
+                }
+                Err(err) => {
+                    error!("Client disconnected {} {}", tx_consumer.identity, err);
+                    tx_consumer.do_unsubscribe.store(true, Ordering::Relaxed);
+                }
+            };
+        }
+    }
+
+    pub fn update_rtt(&mut self, identity: &str, value: pb::Rtt) {
+        let slot = self
+            .values
             .entry(identity.to_string())
             .or_default()
             .entry(value.ip.clone())
@@ -422,7 +447,7 @@ pub fn balancer_updater(
                         )
                         .collect();
                     info!("new leaders # {}", json_str!(&leaders_info));
-                    let leader_values = leaders_info.values().cloned().collect();
+                    let leader_values: Vec<_> = leaders_info.values().cloned().collect();
                     let mut lock = balancer.write().await;
                     lock.set_leaders(leader_values, leaders_info);
                     lock.flush_unsubscribes();
