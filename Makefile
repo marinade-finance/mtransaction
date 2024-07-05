@@ -7,7 +7,8 @@ help:
 	@echo "    image           builds $(name) docker image"
 	@echo "    help            show this help"
 
-.PHONY: build-all build-server build-server-release run-server clean run-client run-client-local run-client-rpc-devnet run-client-rpc-mainnet run-client-blackhole
+.PHONY: help build-all build-client build-server build-server-release run-server clean run-client run-client-local run-client-rpc-devnet run-client-rpc-mainnet run-client-blackhole
+
 .DEFAULT_GOAL := build-all
 
 CERT_DIR = certs
@@ -57,7 +58,7 @@ run-server-local: build-server
 		--stake-override-sol      1000000 2000000 \
 		--tls-grpc-server-cert    ./certs/localhost.cert \
 		--tls-grpc-server-key     ./certs/localhost.key \
-		--tls-grpc-ca-cert        ./certs/ca.cert \
+		--tls-grpc-ca-cert        ./certs/ca.cert
 
 run-client: build-client
 	cargo run --bin mtx-client -- \
