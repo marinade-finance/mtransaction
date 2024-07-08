@@ -1,4 +1,4 @@
-use crate::{metrics, rpc_server::Mode};
+use crate::{metrics, rpc_server::Mode, json_str};
 use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
 use eyre::bail;
 use eyre::Result;
@@ -11,6 +11,7 @@ use solana_client::{
 use solana_sdk::{
     commitment_config::CommitmentConfig, native_token::LAMPORTS_PER_SOL, signature::Signature,
 };
+use solana_transaction_status::TransactionStatus;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error,
@@ -19,6 +20,8 @@ use std::{
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+
+const SLOTS_PER_EPOCH: u64 = 432000;
 
 pub fn solana_client(url: String, commitment: String) -> RpcClient {
     RpcClient::new_with_commitment(url, CommitmentConfig::from_str(&commitment).unwrap())
@@ -47,19 +50,6 @@ pub fn get_current_epoch(client: &RpcClient) -> Result<u64, Box<dyn Error + Send
     let epoch_info = client.get_epoch_info()?;
 
     Ok(epoch_info.epoch)
-}
-
-pub fn slot_stream(pubsub_client: Arc<PubsubClient>) -> Result<(), Box<dyn Error + Send + Sync>> {
-    tokio::spawn(async move {
-        let (mut slot_notifications, _slot_unsubscribe) = pubsub_client.slot_subscribe().await?;
-
-        while let Some(slot_info) = slot_notifications.next().await {
-            info!("slot: {:?}", slot_info);
-        }
-
-        Ok::<_, Box<dyn Error + Send + Sync>>(())
-    });
-    Ok(())
 }
 
 pub fn get_leader_schedule(
@@ -115,7 +105,7 @@ pub fn leaders_stream(
                 },
                 Some(slot_info) = slot_notifications.next() => {
                     let current_leaders: HashSet<_> = (0..N_LEADERS)
-                        .map(|nth_leader| nth_leader * 4 + (slot_info.slot % 432000))
+                        .map(|nth_leader| nth_leader * 4 + (slot_info.slot % SLOTS_PER_EPOCH))
                         .map(|slot| schedule.get(&slot))
                         .flatten()
                         .cloned()
@@ -138,24 +128,24 @@ pub fn leaders_stream(
     Ok(rx)
 }
 
-struct SignatureRecord {
-    created_at: tokio::time::Instant,
-    signature: Signature,
-    mode: Mode,
-    partner_name: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct SignatureWrapper {
+#[derive(Debug, Clone, Serialize)]
+pub struct SignatureRecord {
+    #[serde(skip)]
+    pub span: tracing::Span,
+    #[serde(skip)]
+    pub created_at: tokio::time::Instant,
+    pub ctime: u64,
+    pub rtime: u64,
+    pub req_id: usize,
     pub signature: Signature,
-    pub partner_name: String,
     pub mode: Mode,
+    pub partner_name: String,
 }
 
 pub fn spawn_tx_signature_watcher(
     client: Arc<RpcClient>,
-) -> Result<UnboundedSender<SignatureWrapper>, Box<dyn Error + Send + Sync>> {
-    let (tx_signature, rx_signature) = unbounded_channel::<SignatureWrapper>();
+) -> Result<UnboundedSender<SignatureRecord>, Box<dyn Error + Send + Sync>> {
+    let (tx_signature, rx_signature) = unbounded_channel::<SignatureRecord>();
 
     let mut rx_signature = UnboundedReceiverStream::new(rx_signature);
 
@@ -185,24 +175,18 @@ pub fn spawn_tx_signature_watcher(
                             break;
                         }
                         {
-                            let bundle = signature_queue.drain(0..to_be_bundled_count).map(|r| SignatureWrapper {
-                                signature: r.signature,
-                                partner_name: r.partner_name,
-                                mode: r.mode,
-                            }).collect::<Vec<_>>();
+                            let bundle: Vec<_> = signature_queue.drain(0..to_be_bundled_count).collect();
 
-                            spawn_signature_checker(client.clone(), bundle);
+                            tokio::spawn(signature_checker(client.clone(), bundle));
                         }
                     }
                 },
-                Some(wrapper) = rx_signature.next() => {
-                    signature_queue.push_back(SignatureRecord {
-                        created_at: tokio::time::Instant::now(),
-                        signature: wrapper.signature.clone(),
-                        partner_name: wrapper.partner_name,
-                        mode: wrapper.mode,
-                    });
-                    info!("Will watch for {:?}", &wrapper.signature);
+                Some(mut record) = rx_signature.next() => {
+                    record.created_at = tokio::time::Instant::now();
+                    let span = record.span.clone();
+                    let _span = span.enter();
+                    info!("Will watch for {}", record.signature);
+                    signature_queue.push_back(record);
                 },
                 else => break,
             }
@@ -214,58 +198,66 @@ pub fn spawn_tx_signature_watcher(
     Ok(tx_signature)
 }
 
-fn spawn_signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureWrapper>) {
-    tokio::spawn(async move {
-        match client.get_signature_statuses(
-            &bundle
-                .iter()
-                .map(|f| f.signature)
-                .collect::<Vec<Signature>>(),
-        ) {
-            Ok(response) => {
-                for (i, signature_status) in response.value.iter().enumerate() {
-                    let wrapper = bundle.get(i).unwrap();
-                    if let Some(known_status) = signature_status {
-                        info!(
-                            "Signature status {:?} | Partner: {:?} | Mode: {:?}",
-                            known_status,
-                            wrapper.partner_name,
-                            wrapper.mode.to_string()
-                        );
-                        match known_status.err {
-                            Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS
-                                .with_label_values(&[
-                                    &wrapper.partner_name,
-                                    &wrapper.mode.to_string(),
-                                ])
-                                .inc(),
-                            _ => metrics::CHAIN_TX_EXECUTION_SUCCESS
-                                .with_label_values(&[
-                                    &wrapper.partner_name,
-                                    &wrapper.mode.to_string(),
-                                ])
-                                .inc(),
-                        };
-                        metrics::CHAIN_TX_FINALIZED
-                            .with_label_values(&[&wrapper.partner_name, &wrapper.mode.to_string()])
-                            .inc();
-                    } else {
-                        metrics::CHAIN_TX_TIMEOUT
-                            .with_label_values(&[&wrapper.partner_name, &wrapper.mode.to_string()])
-                            .inc();
-                    }
-                }
-            }
-            Err(err) => {
-                error!("Failed to get signature statuses: {}", err);
-                for tx in bundle {
+fn format_status(status: &TransactionStatus) -> String {
+    let slot = &status.slot;
+    let confirmations = match &status.confirmations {
+        Some(value) => value.to_string(),
+        None => "null".to_string(),
+    };
+    let status = match &status.status {
+        Ok(()) => "ok".to_string(),
+        Err(err) => json_str!(&format!("{}", err)),
+    };
+    format!("\"slot\":{slot},\"confirmations\":{confirmations},\"status\":\"{status}\"")
+}
+
+async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>) {
+    match client.get_signature_statuses(&bundle.iter().map(|f| f.signature).collect::<Vec<_>>())
+    {
+        Ok(response) => {
+            for (record, signature_status) in bundle.iter().zip(response.value.iter()) {
+                let span = record.span.clone();
+                let _span = span.enter();
+                if let Some(known_status) = signature_status {
+                    info!(
+                        "new signature status # {{{},\"rtime\":{}}}",
+                        format_status(known_status),
+                        record.rtime,
+                    );
+                    match known_status.err {
+                        Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS
+                            .with_label_values(&[
+                                &record.partner_name,
+                                &record.mode.to_string(),
+                            ])
+                            .inc(),
+                        _ => metrics::CHAIN_TX_EXECUTION_SUCCESS
+                            .with_label_values(&[
+                                &record.partner_name,
+                                &record.mode.to_string(),
+                            ])
+                            .inc(),
+                    };
+                    metrics::CHAIN_TX_FINALIZED
+                        .with_label_values(&[&record.partner_name, &record.mode.to_string()])
+                        .inc();
+                } else {
                     metrics::CHAIN_TX_TIMEOUT
-                        .with_label_values(&[&tx.partner_name, &tx.mode.to_string()])
+                        .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                         .inc();
                 }
             }
         }
-    });
+        Err(err) => {
+            for tx in bundle {
+                let _span = tx.span.enter();
+                error!("Failed to get signature status: {}", err);
+                metrics::CHAIN_TX_TIMEOUT
+                    .with_label_values(&[&tx.partner_name, &tx.mode.to_string()])
+                    .inc();
+            }
+        }
+    }
 }
 
 #[derive(Deserialize)]
