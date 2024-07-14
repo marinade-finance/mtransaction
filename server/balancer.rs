@@ -9,6 +9,7 @@ use jsonrpc_http_server::*;
 use log::{error, info, warn};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use serde::Serialize;
 use solana_client::{nonblocking::pubsub_client::PubsubClient, rpc_client::RpcClient};
 use solana_gossip::cluster_info::ClusterInfo;
 use solana_gossip::contact_info::Protocol;
@@ -16,7 +17,6 @@ use solana_gossip::gossip_service::make_gossip_node;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::keypair;
 use solana_streamer::socket::SocketAddrSpace;
-use serde::Serialize;
 use std::net::ToSocketAddrs;
 use std::str::FromStr;
 use std::{
@@ -90,6 +90,8 @@ pub async fn publish_tpus_to_consumer(tx_consumer: &TxConsumer, tpus: Vec<String
     };
 }
 
+type BalancerMessage = std::result::Result<grpc_server::pb::ResponseMessageEnvelope, Status>;
+
 impl Balancer {
     pub fn new(watcher_inbox: UnboundedSender<SignatureRecord>) -> Self {
         Self {
@@ -108,8 +110,8 @@ impl Balancer {
         identity: String,
         token: String,
     ) -> (
-        mpsc::Sender<std::result::Result<grpc_server::pb::ResponseMessageEnvelope, Status>>,
-        mpsc::Receiver<std::result::Result<grpc_server::pb::ResponseMessageEnvelope, Status>>,
+        mpsc::Sender<BalancerMessage>,
+        mpsc::Receiver<BalancerMessage>,
         oneshot::Receiver<()>,
     ) {
         info!("Subscribing # {{\"identity\":\"{identity}\",\"token\":\"{token}\"}}");
@@ -123,7 +125,7 @@ impl Balancer {
             tx_unsubscribe: Some(tx_unsubscribe),
             do_unsubscribe: false.into(),
         };
-        self.tx_consumers.insert(identity.clone(), tx_consumer);
+        self.tx_consumers.insert(identity, tx_consumer);
         self.recalc_total_connected_stake();
         (tx, rx, rx_unsubcribe)
     }
@@ -169,9 +171,6 @@ impl Balancer {
             }
         };
                 
-        let rtt = values.rtt.total / values.rtt.count;
-        let land_ratio = values.success.total / values.success.count;
-
         let rtt_ratio = (values.rtt.total + 400_000.0) / (values.rtt.count + 10.0) / 60_000.0;
         let land_ratio = (values.success.total + 10.0) / (values.success.count + 10.0);
         let bound = (0.1 / (values.rtt.count + 5.0 * values.success.count)).max(0.01);
@@ -255,7 +254,7 @@ impl Balancer {
             .filter_map(|(identity, leaders)| {
                 self.tx_consumers
                     .get(&identity)
-                    .and_then(|x| Some((x, leaders)))
+                    .map(|x| (x, leaders))
             })
             .collect()
     }
@@ -278,8 +277,8 @@ impl Balancer {
         }
         self.total_connected_stake = self
             .tx_consumers
-            .iter()
-            .map(|(_, consumer)| consumer.stake)
+            .values()
+            .map(|consumer| consumer.stake)
             .sum();
     }
 
@@ -295,7 +294,7 @@ impl Balancer {
         let tx_consumers = self.pick_consumers();
         if tx_consumers.is_empty() {
             span.in_scope(|| error!("Dropping tx, no available clients"));
-            return Err(format!("No available clients connected").into());
+            return Err("No available clients connected".into());
         }
 
         for (tx_consumer, info) in tx_consumers {
@@ -360,7 +359,7 @@ impl Balancer {
         self.leaders = leaders;
     }
 
-    pub async fn publish_tpus(&self, leader_tpus: &Vec<LeaderInfo>) {
+    pub async fn publish_tpus(&self, leader_tpus: &[LeaderInfo]) {
         // TODO ... redesign into an actor so that txs are not blocked if rtt stalls
         let tpus: HashSet<_> = leader_tpus.iter().map(|x| x.tpu.clone()).collect();
         for tx_consumer in self.tx_consumers.values() {
@@ -380,8 +379,14 @@ impl Balancer {
             slot.success.total += 1.0;
         }
         slot.success.count += 1.0;
-        let slot_str = format!("\"total\":{},\"count\":{}", slot.success.total, slot.success.count);
-        info!("balancer success values updated # {{\"ip\":\"{}\",{slot_str}}}", tpu_ip);
+        let slot_str = format!(
+            "\"total\":{},\"count\":{}",
+            slot.success.total, slot.success.count
+        );
+        info!(
+            "balancer success values updated # {{\"ip\":\"{}\",{slot_str}}}",
+            tpu_ip
+        );
     }
 
     pub fn update_rtt(&mut self, identity: &str, value: pb::Rtt) {
@@ -394,7 +399,10 @@ impl Balancer {
         slot.rtt.total += value.rtt as f64;
         slot.rtt.count += 1 as f64;
         let slot_str = format!("\"total\":{},\"count\":{}", slot.rtt.total, slot.rtt.count);
-        info!("balancer rtt values updated # {{\"ip\":\"{}\",{slot_str}}}", value.ip);
+        info!(
+            "balancer rtt values updated # {{\"ip\":\"{}\",{slot_str}}}",
+            value.ip
+        );
         metrics::CLIENT_TPU_IP_PING_RTT
             .with_label_values(&[
                 &identity,
@@ -423,10 +431,13 @@ fn lookup_info(
 ) -> Option<LeaderInfo> {
     validator_records.get(identity).map(|record| {
         let mut record = record.clone();
-        cluster_info
-            .lookup_contact_info(&Pubkey::from_str(identity).unwrap(), |x| x.clone())
-            .and_then(|x| x.tpu(Protocol::QUIC).ok())
-            .map(|x| record.tpu = x.to_string());
+        let contact = cluster_info
+            .lookup_contact_info(&Pubkey::from_str(identity).unwrap(), |x| x.clone());
+        if let Some(contact) = contact {
+            if let Ok(tpu) = contact.tpu(Protocol::QUIC) {
+                record.tpu = tpu.to_string();
+            }
+        }
         record
     })
 }
@@ -436,9 +447,8 @@ pub fn balancer_updater(
     client: Arc<RpcClient>,
     pubsub_client: Arc<PubsubClient>,
 ) {
-    let balancer = balancer.clone();
     let mut rx_leaders = UnboundedReceiverStream::new(
-        leaders_stream(client.clone(), pubsub_client.clone()).unwrap(),
+        leaders_stream(client.clone(), pubsub_client).unwrap(),
     );
 
     let exit = Arc::new(AtomicBool::new(false));

@@ -177,13 +177,13 @@ impl Rpc for RpcServer {
             .deserialize_from(&wire_transaction[..])
             .map_err(|err| {
                 error!("Deserialize error: {}", err);
-                jsonrpc_core::error::Error::invalid_params(&err.to_string())
+                jsonrpc_core::error::Error::invalid_params(err.to_string())
             });
 
         let signature = match decoded {
             Ok(decoded) => {
                 if let Some(signature) = decoded.signatures.get(0) {
-                    signature.clone()
+                    *signature
                 } else {
                     return Box::pin(
                         async move {
@@ -212,7 +212,7 @@ impl Rpc for RpcServer {
             req_id,
             ctime,
             rtime: time_ms(),
-            signature: signature.clone(),
+            signature,
             partner_name: auth.to_string(),
             mode: meta.mode.clone(),
             consumers: vec![],
@@ -235,7 +235,7 @@ impl Rpc for RpcServer {
                     }),
                 }
             }
-            .instrument(span.clone()),
+            .instrument(span),
         )
     }
 
@@ -321,7 +321,7 @@ pub fn spawn_rpc_server(
 
                 (
                     auth.clone(),
-                    select_mode(auth.clone().ok(), partners.clone()),
+                    select_mode(auth.ok(), partners.clone()),
                 )
             } else {
                 // In this mode, we trust whatever the end user puts in the Authorization header

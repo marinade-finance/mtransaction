@@ -1,6 +1,5 @@
 use crate::{json_str, metrics, rpc_server::Mode, Balancer};
 use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
-use tokio::sync::RwLock;
 use eyre::bail;
 use eyre::Result;
 use log::{debug, error, info};
@@ -20,6 +19,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
 
 const SLOTS_PER_EPOCH: u64 = 432000;
@@ -62,8 +62,7 @@ pub fn get_leader_schedule(
 
     Ok(leader_schedule
         .iter()
-        .map(|(identity, slots)| slots.iter().map(|slot| (*slot as u64, identity.clone())))
-        .flatten()
+        .flat_map(|(identity, slots)| slots.iter().map(|slot| (*slot as u64, identity.clone())))
         .collect())
 }
 
@@ -74,10 +73,7 @@ pub fn get_tpu_by_identity(
 
     Ok(nodes
         .iter()
-        .flat_map(|node| match node.tpu_quic {
-            Some(tpu) => Some((node.pubkey.clone(), tpu.to_string())),
-            _ => None,
-        })
+       .flat_map(|node| node.tpu_quic.map(|tpu| (node.pubkey.clone(), tpu.to_string())))
         .collect())
 }
 
@@ -107,8 +103,7 @@ pub fn leaders_stream(
                 Some(slot_info) = slot_notifications.next() => {
                     let current_leaders: HashSet<_> = (0..N_LEADERS)
                         .map(|nth_leader| nth_leader * 4 + (slot_info.slot % SLOTS_PER_EPOCH))
-                        .map(|slot| schedule.get(&slot))
-                        .flatten()
+                        .filter_map(|slot| schedule.get(&slot))
                         .cloned()
                         .collect();
                     debug!("Slot: {:?}, {:?}", slot_info, &current_leaders);
@@ -206,7 +201,11 @@ fn format_status(status: &TransactionStatus) -> String {
     format!("\"slot\":{slot},\"confirmations\":{confirmations},\"status\":\"{status}\"")
 }
 
-async fn signature_checker(client: Arc<RpcClient>, balancer: Arc<RwLock<Balancer>>, bundle: Vec<SignatureRecord>) {
+async fn signature_checker(
+    client: Arc<RpcClient>,
+    balancer: Arc<RwLock<Balancer>>,
+    bundle: Vec<SignatureRecord>,
+) {
     match client.get_signature_statuses(&bundle.iter().map(|f| f.signature).collect::<Vec<_>>()) {
         Ok(response) => {
             for (record, signature_status) in bundle.iter().zip(response.value.iter()) {
@@ -234,12 +233,12 @@ async fn signature_checker(client: Arc<RpcClient>, balancer: Arc<RwLock<Balancer
                         .inc();
                     for consumer in &record.consumers {
                         metrics::CHAIN_TX_FINALIZED_BY_CONSUMER
-                            .with_label_values(&[&consumer])
+                            .with_label_values(&[consumer])
                             .inc();
                     }
                     for tpu_ip in &record.tpu_ips {
                         metrics::CHAIN_TX_FINALIZED_BY_TPU_IP
-                            .with_label_values(&[&tpu_ip])
+                            .with_label_values(&[tpu_ip])
                             .inc();
                     }
                     success = true;
@@ -354,7 +353,7 @@ fn merge_validator_records(
 ) -> HashMap<String, LeaderInfo> {
     let mut result: HashMap<String, LeaderInfo> = HashMap::default();
     for (identity, tpu) in tpus.into_iter() {
-        validator_records.get(&identity).map(|record| {
+        if let Some(record) = validator_records.get(&identity) {
             let is_jito = jito_identities.get(&record.vote_account).is_some();
             let info = LeaderInfo {
                 identity: identity.clone(),
@@ -363,7 +362,7 @@ fn merge_validator_records(
                 is_jito,
             };
             result.insert(identity, info);
-        });
+        }
     }
     result
 }

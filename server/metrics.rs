@@ -97,7 +97,7 @@ lazy_static! {
         "mtx_chain_tx_execution_error",
         "How many transactions ended on chain with errors",
         &["partner", "mode"]
-           
+
     )
     .unwrap();
     pub static ref SERVER_RPC_TX_ACCEPTED: IntGaugeVec = register_int_gauge_vec!(
@@ -125,7 +125,7 @@ lazy_static! {
 
 }
 
-pub fn reset_client_metrics(identity: &String) {
+pub fn reset_client_metrics(identity: &str) {
     if let Err(err) = CLIENT_PING_RTT.remove_label_values(&[identity]) {
         warn!(
             "Couldn't discard latency metrics for {}. Error: {:?}",
@@ -145,7 +145,7 @@ pub fn spawn(metrics_addr: std::net::SocketAddr) {
         init_metrics();
         let metrics_route = warp::path!("metrics")
             .and(warp::get())
-            .map(|| metrics_handler());
+            .map(metrics_handler);
         info!("Spawning metrics server");
         warp::serve(metrics_route).run(metrics_addr).await;
     });

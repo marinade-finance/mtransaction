@@ -14,8 +14,8 @@ use solana_sdk::signature::{read_keypair_file, Keypair};
 use std::ops::Sub;
 use std::panic;
 use std::process;
-use std::time::{Instant, SystemTime};
 use std::sync::Arc;
+use std::time::{Instant, SystemTime};
 use structopt::StructOpt;
 use tokio::{
     sync::{mpsc::UnboundedSender, RwLock},
@@ -121,9 +121,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut grpc_urls_from_file = read_grpc_urls_from_file(params.grpc_urls_file)
         .expect("failed to read gRPC urls from file");
 
-    let signals = Signals::new(&[SIGHUP])?;
+    let signals = Signals::new([SIGHUP])?;
 
-    let _ = tokio::spawn(handle_signals(signals, grpc_urls_channel_sender));
+    let _task = tokio::spawn(handle_signals(signals, grpc_urls_channel_sender));
 
     let (identity, tpu_addr) = match (&params.identity, &params.tpu_addr) {
         (Some(identity), Some(tpu_addr)) => (
@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let all_tasks: RwLock<HashMap<String, JoinHandle<()>>> = RwLock::new(HashMap::new());
 
-    let identity = Arc::new(identity.unwrap_or_else(|| Keypair::new()));
+    let identity = Arc::new(identity.unwrap_or_else(Keypair::new));
     build_tasks(
         &identity,
         grpc_urls_from_file.clone(),
@@ -213,7 +213,7 @@ async fn spawn_grpc_connection_with_retry(
     tls_grpc_client_key: Option<String>,
     tls_grpc_client_cert: Option<String>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
-) -> () {
+) {
     let mut retry = 0;
     loop {
         let retry_delay = match spawn_grpc_client(
@@ -282,7 +282,7 @@ fn read_grpc_urls_from_file(file_path: String) -> Result<Vec<String>, Error> {
                             if let Some(url) = x.as_str() {
                                 return url.to_string();
                             }
-                            return "".to_string();
+                            "".to_string()
                         })
                         .collect::<Vec<_>>();
 
@@ -306,10 +306,10 @@ fn read_grpc_urls_from_file(file_path: String) -> Result<Vec<String>, Error> {
             }
         }
     }
-    return Err(Error::new(
+    Err(Error::new(
         std::io::ErrorKind::Other,
         "No mtransaction_servers found",
-    ));
+    ))
 }
 
 async fn build_tasks(

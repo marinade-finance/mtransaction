@@ -8,9 +8,9 @@ use pb::{
     m_transaction_client::MTransactionClient, Pong, RequestMessageEnvelope,
     ResponseMessageEnvelope, Rtt, Transaction,
 };
-use solana_sdk::signature::Keypair;
 use solana_client::connection_cache::ConnectionCache;
 use solana_client::nonblocking::tpu_connection::TpuConnection;
+use solana_sdk::signature::Keypair;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
@@ -20,7 +20,11 @@ use tonic::{
     Status,
 };
 
-async fn tpu_ping(outbox: UnboundedSender<RequestMessageEnvelope>, identity: Arc<Keypair>, tpu: String) {
+async fn tpu_ping(
+    outbox: UnboundedSender<RequestMessageEnvelope>,
+    identity: Arc<Keypair>,
+    tpu: String,
+) {
     info!("tpu_ping spawn ping to {tpu}");
     let tpu_addr: SocketAddr = match tpu.parse() {
         Ok(value) => value,
@@ -42,13 +46,10 @@ async fn tpu_ping(outbox: UnboundedSender<RequestMessageEnvelope>, identity: Arc
         error!("tpu_ping failed to measure rtt: {err}");
         // return;
     };
-    let took = time_us() - t0;
-
     let msg = RequestMessageEnvelope {
         rtt: Some(Rtt {
             ip: tpu.split(':').next().unwrap_or("").to_string(),
-            took,
-            n: 1,
+            rtt: time_us() - t0,
         }),
         ..Default::default()
     };

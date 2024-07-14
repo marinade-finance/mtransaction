@@ -38,8 +38,8 @@ impl QuicForwarder {
         }
     }
 
-    fn spawn_transaction_forwarder(&self, source: String, transaction: Transaction, tpu: &String) {
-        let tpu = tpu.clone();
+    fn spawn_transaction_forwarder(&self, source: String, transaction: Transaction, tpu: &str) {
+        let tpu = tpu.to_owned();
         let throttle_parallel = self.throttle_parallel.clone();
         let connection_cache = self.connection_cache.clone();
         let max_permits = self.max_permits;

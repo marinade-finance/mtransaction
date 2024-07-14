@@ -90,3 +90,30 @@ run-client-blackhole: build-client
 		--tls-grpc-client-key  ./certs/client.$(client).key \
 		--tls-grpc-client-cert ./certs/client.$(client).cert \
 		--blackhole
+
+run-client-blackhole-2: build-client
+	cargo run --bin mtx-client -- \
+		--grpc-urls-file       ./client.yml \
+		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--tls-grpc-client-key  ./certs/client.$(client).key \
+		--tls-grpc-client-cert ./certs/client.$(client).cert \
+	 	--metrics-addr 127.0.0.1:9092 \
+		--blackhole
+
+run-client-blackhole-3: build-client
+	cargo run --bin mtx-client -- \
+		--grpc-urls-file       ./client.yml \
+		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--tls-grpc-client-key  ./certs/client.$(client).key \
+		--tls-grpc-client-cert ./certs/client.$(client).cert \
+	 	--metrics-addr 127.0.0.1:9093 \
+		--blackhole
+
+run-client-blackhole-4: build-client
+	cargo run --bin mtx-client -- \
+		--grpc-urls-file       ./client.yml \
+		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--tls-grpc-client-key  ./certs/client.$(client).key \
+		--tls-grpc-client-cert ./certs/client.$(client).cert \
+	 	--metrics-addr 127.0.0.1:9094 \
+		--blackhole

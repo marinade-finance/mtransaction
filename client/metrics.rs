@@ -113,7 +113,7 @@ pub fn spawn_metrics(metrics_addr: std::net::SocketAddr) -> tokio::task::JoinHan
         let route_metrics = warp::path!("metrics")
             .and(warp::path::end())
             .and(warp::get())
-            .map(|| collect_metrics());
+            .map(collect_metrics);
         warp::serve(route_metrics).run(metrics_addr).await;
         error!("Metrics server is not up.");
         std::process::exit(1);

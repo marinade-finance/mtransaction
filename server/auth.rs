@@ -38,7 +38,7 @@ impl ToString for JWT {
         if let Some(pubkey) = &self.pubkey {
             return format!("JWT:pubkey:{}", pubkey);
         }
-        return "JWT:Anonymous".to_string();
+        "JWT:Anonymous".to_string()
     }
 }
 
@@ -55,7 +55,7 @@ fn authorization_header_auth(
         return Err("Authorization header must start with 'Bearer '!".into());
     }
     let token = header_parts.next();
-    if let Some(_) = header_parts.next() {
+    if header_parts.next().is_some() {
         return Err("There must be no extra characters after Bearer token!".into());
     }
     match token {
