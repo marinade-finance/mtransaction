@@ -73,7 +73,10 @@ pub fn get_tpu_by_identity(
 
     Ok(nodes
         .iter()
-       .flat_map(|node| node.tpu_quic.map(|tpu| (node.pubkey.clone(), tpu.to_string())))
+        .flat_map(|node| {
+            node.tpu_quic
+                .map(|tpu| (node.pubkey.clone(), tpu.to_string()))
+        })
         .collect())
 }
 

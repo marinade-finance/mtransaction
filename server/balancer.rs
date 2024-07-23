@@ -170,7 +170,7 @@ impl Balancer {
                 return 0.1;
             }
         };
-                
+
         let rtt_ratio = (values.rtt.total + 400_000.0) / (values.rtt.count + 10.0) / 60_000.0;
         let land_ratio = (values.success.total + 10.0) / (values.success.count + 10.0);
         let bound = (0.1 / (values.rtt.count + 5.0 * values.success.count)).max(0.01);
@@ -252,9 +252,7 @@ impl Balancer {
         consumers
             .into_iter()
             .filter_map(|(identity, leaders)| {
-                self.tx_consumers
-                    .get(&identity)
-                    .map(|x| (x, leaders))
+                self.tx_consumers.get(&identity).map(|x| (x, leaders))
             })
             .collect()
     }
@@ -404,10 +402,7 @@ impl Balancer {
             value.ip
         );
         metrics::CLIENT_TPU_IP_PING_RTT
-            .with_label_values(&[
-                &identity,
-                &value.ip
-            ])
+            .with_label_values(&[&identity, &value.ip])
             .set(slot.rtt.total / slot.rtt.count)
     }
 
@@ -431,8 +426,8 @@ fn lookup_info(
 ) -> Option<LeaderInfo> {
     validator_records.get(identity).map(|record| {
         let mut record = record.clone();
-        let contact = cluster_info
-            .lookup_contact_info(&Pubkey::from_str(identity).unwrap(), |x| x.clone());
+        let contact =
+            cluster_info.lookup_contact_info(&Pubkey::from_str(identity).unwrap(), |x| x.clone());
         if let Some(contact) = contact {
             if let Ok(tpu) = contact.tpu(Protocol::QUIC) {
                 record.tpu = tpu.to_string();
@@ -447,9 +442,8 @@ pub fn balancer_updater(
     client: Arc<RpcClient>,
     pubsub_client: Arc<PubsubClient>,
 ) {
-    let mut rx_leaders = UnboundedReceiverStream::new(
-        leaders_stream(client.clone(), pubsub_client).unwrap(),
-    );
+    let mut rx_leaders =
+        UnboundedReceiverStream::new(leaders_stream(client.clone(), pubsub_client).unwrap());
 
     let exit = Arc::new(AtomicBool::new(false));
     let keypair = keypair::Keypair::new();

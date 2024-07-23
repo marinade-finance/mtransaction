@@ -319,10 +319,7 @@ pub fn spawn_rpc_server(
                 let auth =
                     authenticate((*public_key).clone(), auth_header).map_err(|err| err.to_string());
 
-                (
-                    auth.clone(),
-                    select_mode(auth.ok(), partners.clone()),
-                )
+                (auth.clone(), select_mode(auth.ok(), partners.clone()))
             } else {
                 // In this mode, we trust whatever the end user puts in the Authorization header
                 // This assumes that the end user is well known

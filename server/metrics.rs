@@ -143,9 +143,7 @@ pub fn reset_client_metrics(identity: &str) {
 pub fn spawn(metrics_addr: std::net::SocketAddr) {
     tokio::spawn(async move {
         init_metrics();
-        let metrics_route = warp::path!("metrics")
-            .and(warp::get())
-            .map(metrics_handler);
+        let metrics_route = warp::path!("metrics").and(warp::get()).map(metrics_handler);
         info!("Spawning metrics server");
         warp::serve(metrics_route).run(metrics_addr).await;
     });
