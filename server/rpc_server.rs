@@ -1,6 +1,6 @@
 use crate::auth::{authenticate, load_public_key, Auth};
-use crate::solana_service::SignatureRecord;
 use crate::{balancer::*, metrics, time_ms};
+use crate::solana_service::SignatureRecord;
 use tracing::Instrument;
 use bincode::config::Options;
 use jsonrpc_core::{BoxFuture, MetaIoHandler, Metadata, Result};
@@ -12,7 +12,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{packet::PACKET_DATA_SIZE, transaction::VersionedTransaction};
 use std::{fmt, sync::{Arc, atomic::{AtomicUsize, Ordering}}};
-use tokio::sync::{mpsc::UnboundedSender, RwLock};
+use tokio::sync::RwLock;
 use tracing::info_span;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -34,7 +34,6 @@ impl fmt::Display for Mode {
 pub struct RpcState {
     auth: std::result::Result<Auth, String>,
     balancer: Arc<RwLock<Balancer>>,
-    tx_signatures: UnboundedSender<SignatureRecord>,
     req_id: usize,
     mode: Mode,
 }
@@ -108,14 +107,6 @@ impl Rpc for RpcServer {
             }
         };
 
-        let span = info_span!(
-            "send_priority_transaction",
-            req_id = req_id,
-            ctime = ctime,
-            partner_name = auth.to_string(),
-            mode = meta.mode.to_string(),
-        );
-
         match config {
             Some(config) => match config.skip_preflight {
                 Some(skip_preflight) => {
@@ -186,7 +177,13 @@ impl Rpc for RpcServer {
             Err(err) => return Box::pin(async move { Err(err) }.instrument(span)),
         };
 
-        let session_info = SignatureRecord {
+        if meta.mode == Mode::BLACKHOLE {
+            span.in_scope(|| info!("Transaction blackholed: {}", signature.to_string()));
+            return Box::pin(async move { Ok(signature.to_string()) }.instrument(span));
+        }
+
+        let span_ = span.clone();
+        let session = SignatureRecord {
             created_at: tokio::time::Instant::now(),
             span: span.clone(),
             req_id,
@@ -195,24 +192,15 @@ impl Rpc for RpcServer {
             signature: signature.clone(),
             partner_name: auth.to_string(),
             mode: meta.mode.clone(),
+            consumers: vec![],
+            tpu_ips: Default::default(),
         };
-        if let Err(err) = meta.tx_signatures.send(session_info.clone()) {
-            let _span = span.enter();
-            error!("Failed to propagate signature to the watcher: {}", err);
-        }
-
-        if meta.mode == Mode::BLACKHOLE {
-            span.in_scope(|| info!("Transaction blackholed: {}", signature.to_string()));
-            return Box::pin(async move { Ok(signature.to_string()) }.instrument(span));
-        }
-
-        let span_ = span.clone();
         Box::pin(async move {
             match meta
                 .balancer
                 .read()
                 .await
-                .publish(span_, signature.to_string(), data)
+                .publish(span_, session, signature.to_string(), data)
                 .await
             {
                 Ok(_) => Ok(signature.to_string()),
@@ -279,7 +267,6 @@ pub fn spawn_rpc_server(
     jwt_public_key_path: Option<String>,
     test_partners: Option<Vec<String>>,
     balancer: Arc<RwLock<Balancer>>,
-    tx_signatures: UnboundedSender<SignatureRecord>,
 ) -> Server {
     info!("Spawning RPC server.");
 
@@ -321,7 +308,6 @@ pub fn spawn_rpc_server(
             RpcState {
                 auth,
                 balancer: balancer.clone(),
-                tx_signatures: tx_signatures.clone(),
                 req_id: req_id_gen.fetch_add(1, Ordering::Relaxed),
                 mode,
             }
