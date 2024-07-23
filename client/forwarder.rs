@@ -2,32 +2,27 @@ use crate::grpc_client::pb::Transaction;
 use crate::metrics;
 use crate::quic_forwarder::QuicForwarder;
 use crate::rpc_forwarder::RpcForwarder;
-use enum_dispatch::enum_dispatch;
 use log::{info, warn};
 use solana_sdk::signature::Keypair;
 use std::net::IpAddr;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-#[enum_dispatch]
-enum TransactionForwarder {
-    Quic(QuicForwarder),
-    Rpc(RpcForwarder),
-    Blackhole(BlackholeForwarder),
-}
-
+#[derive(Debug)]
 pub struct ForwardedTransaction {
+    pub ctime: u64,
     pub source: String,
     pub transaction: Transaction,
 }
 
-#[enum_dispatch(TransactionForwarder)]
 pub trait Forwarder {
-    fn process(&self, source: String, transaction: Transaction) -> ();
+    fn process(&self, tx: ForwardedTransaction);
 }
 
 struct BlackholeForwarder {}
 impl Forwarder for BlackholeForwarder {
-    fn process(&self, source: String, transaction: Transaction) {
+    fn process(&self, tx: ForwardedTransaction) {
+        let transaction = tx.transaction;
+        let source = tx.source;
         metrics::TX_RECEIVED_COUNT
             .with_label_values(&[source.as_str()])
             .inc();
@@ -36,7 +31,7 @@ impl Forwarder for BlackholeForwarder {
             .inc();
         info!(
             "Tx {} -> blackhole ({:?})",
-            transaction.signature, transaction.tpu
+            transaction.signature, transaction
         );
     }
 }
@@ -48,26 +43,33 @@ pub fn spawn_forwarder(
     blackhole: bool,
     throttle_parallel: usize,
 ) -> UnboundedSender<ForwardedTransaction> {
-    let forwarder = if blackhole {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ForwardedTransaction>();
+    if blackhole {
         warn!("Blackholing all transactions!");
-        TransactionForwarder::Blackhole(BlackholeForwarder {})
+        tokio::spawn(forwarder_loop(rx, BlackholeForwarder {}));
     } else if let Some(rpc_url) = rpc_url {
         if identity.is_some() || tpu_addr.is_some() {
             panic!("Cannot use parameters identity and tpu-addr when rpc-url is specified!");
         }
-        TransactionForwarder::Rpc(RpcForwarder::new(rpc_url, throttle_parallel))
+        tokio::spawn(forwarder_loop(
+            rx,
+            RpcForwarder::new(rpc_url, throttle_parallel),
+        ));
     } else {
-        TransactionForwarder::Quic(QuicForwarder::new(identity, tpu_addr, throttle_parallel))
+        tokio::spawn(forwarder_loop(
+            rx,
+            QuicForwarder::new(identity, tpu_addr, throttle_parallel),
+        ));
     };
 
-    let (tx_transactions, mut rx_transactions) =
-        tokio::sync::mpsc::unbounded_channel::<ForwardedTransaction>();
+    tx
+}
 
-    tokio::spawn(async move {
-        while let Some(transaction) = rx_transactions.recv().await {
-            forwarder.process(transaction.source, transaction.transaction);
-        }
-    });
-
-    tx_transactions
+pub async fn forwarder_loop<T: Forwarder>(
+    mut rx_transactions: UnboundedReceiver<ForwardedTransaction>,
+    forwarder: T,
+) {
+    while let Some(tx) = rx_transactions.recv().await {
+        forwarder.process(tx);
+    }
 }

@@ -1,8 +1,9 @@
 use lazy_static::lazy_static;
 use log::{info, warn};
 use prometheus::{
-    register_histogram_vec, register_int_counter, register_int_gauge, register_int_gauge_vec,
-    Encoder, HistogramVec, IntCounter, IntGauge, IntGaugeVec, TextEncoder,
+    register_gauge_vec, register_histogram_vec, register_int_counter, register_int_gauge,
+    register_int_gauge_vec, Encoder, GaugeVec, HistogramVec, IntCounter, IntGauge, IntGaugeVec,
+    TextEncoder,
 };
 use warp::Filter;
 
@@ -37,6 +38,12 @@ lazy_static! {
         &["identity"]
     )
     .unwrap();
+    pub static ref CLIENT_TPU_IP_PING_RTT: GaugeVec = register_gauge_vec!(
+        "mtx_client_tpi_ip_ping_rtt",
+        "Latency from the client to a TPU IP",
+        &["identity", "tpu_ip"],
+    )
+    .unwrap();
     pub static ref CLIENT_PING_RTT: HistogramVec = register_histogram_vec!(
         "mtx_client_ping_rtt",
         "Latency to the client based on ping times",
@@ -68,15 +75,15 @@ lazy_static! {
         &["partner", "mode"]
     )
     .unwrap();
-    pub static ref CHAIN_TX_TIMEOUT_BY_CONSUMER: IntGaugeVec = register_int_gauge_vec!(
-        "mtx_chain_tx_timeout_by_consumer",
-        "How many transactions timed out submitted through consumer",
+    pub static ref CHAIN_TX_SUBMIT_BY_CONSUMER: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_submit_by_consumer",
+        "How many transactions were submitted through the consumer",
         &["consumer"]
     )
     .unwrap();
-    pub static ref CHAIN_TX_TIMEOUT_BY_TPU_IP: IntGaugeVec = register_int_gauge_vec!(
-        "mtx_chain_tx_timeout_by_tpu_ip",
-        "How many transactions timed out submitted through a specific tpu ip",
+    pub static ref CHAIN_TX_SUBMIT_BY_TPU_IP: IntGaugeVec = register_int_gauge_vec!(
+        "mtx_chain_tx_submit_by_tpu_ip",
+        "How many transactions were submitted through a specific tpu ip",
         &["tpu_ip"]
     )
     .unwrap();
@@ -86,9 +93,11 @@ lazy_static! {
         &["partner", "mode"]
     )
     .unwrap();
-    pub static ref CHAIN_TX_EXECUTION_ERROR: IntCounter = register_int_counter!(
+    pub static ref CHAIN_TX_EXECUTION_ERROR: IntGaugeVec = register_int_gauge_vec!(
         "mtx_chain_tx_execution_error",
-        "How many transactions ended on chain with errors"
+        "How many transactions ended on chain with errors",
+        &["partner", "mode"]
+
     )
     .unwrap();
     pub static ref SERVER_RPC_TX_ACCEPTED: IntGaugeVec = register_int_gauge_vec!(
@@ -116,7 +125,7 @@ lazy_static! {
 
 }
 
-pub fn reset_client_metrics(identity: &String) {
+pub fn reset_client_metrics(identity: &str) {
     if let Err(err) = CLIENT_PING_RTT.remove_label_values(&[identity]) {
         warn!(
             "Couldn't discard latency metrics for {}. Error: {:?}",
@@ -134,9 +143,7 @@ pub fn reset_client_metrics(identity: &String) {
 pub fn spawn(metrics_addr: std::net::SocketAddr) {
     tokio::spawn(async move {
         init_metrics();
-        let metrics_route = warp::path!("metrics")
-            .and(warp::get())
-            .map(|| metrics_handler());
+        let metrics_route = warp::path!("metrics").and(warp::get()).map(metrics_handler);
         info!("Spawning metrics server");
         warp::serve(metrics_route).run(metrics_addr).await;
     });

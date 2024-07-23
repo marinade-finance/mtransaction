@@ -10,9 +10,12 @@ use env_logger::Env;
 use forwarder::ForwardedTransaction;
 use log::{error, info};
 use signal_hook_tokio::Signals;
-use solana_sdk::signature::read_keypair_file;
+use solana_sdk::signature::{read_keypair_file, Keypair};
+use std::ops::Sub;
 use std::panic;
 use std::process;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime};
 use structopt::StructOpt;
 use tokio::{
     sync::{mpsc::UnboundedSender, RwLock},
@@ -66,6 +69,35 @@ struct Params {
     throttle_parallel: usize,
 }
 
+#[inline]
+pub fn time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[inline]
+pub fn time_us() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as u64
+}
+
+#[derive(Clone, Debug)]
+pub struct PerfCounterNanos(Instant);
+impl Sub for PerfCounterNanos {
+    type Output = u64;
+    fn sub(self, rhs: Self) -> u64 {
+        (self.0 - rhs.0).as_nanos() as u64
+    }
+}
+#[inline]
+pub fn perf_counter_ns() -> PerfCounterNanos {
+    PerfCounterNanos(Instant::now())
+}
+
 fn setup_panic_hook() {
     let hook = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
@@ -89,9 +121,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut grpc_urls_from_file = read_grpc_urls_from_file(params.grpc_urls_file)
         .expect("failed to read gRPC urls from file");
 
-    let signals = Signals::new(&[SIGHUP])?;
+    let signals = Signals::new([SIGHUP])?;
 
-    let _ = tokio::spawn(handle_signals(signals, grpc_urls_channel_sender));
+    let _task = tokio::spawn(handle_signals(signals, grpc_urls_channel_sender));
 
     let (identity, tpu_addr) = match (&params.identity, &params.tpu_addr) {
         (Some(identity), Some(tpu_addr)) => (
@@ -104,7 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _metrics = metrics::spawn_metrics(params.metrics_addr.parse().unwrap());
 
     let tx_transactions = spawn_forwarder(
-        identity,
+        identity.as_ref().map(|x| x.insecure_clone()),
         tpu_addr,
         params.rpc_url,
         params.blackhole,
@@ -113,7 +145,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let all_tasks: RwLock<HashMap<String, JoinHandle<()>>> = RwLock::new(HashMap::new());
 
+    let identity = Arc::new(identity.unwrap_or_else(Keypair::new));
     build_tasks(
+        &identity,
         grpc_urls_from_file.clone(),
         &Params::from_args(),
         tx_transactions.clone(),
@@ -153,6 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!("Spawning tasks for new urls: {:?}", urls_to_spawn);
 
                 build_tasks(
+                    &identity,
                     urls_to_spawn,
                     &Params::from_args(),
                     tx_transactions.clone(),
@@ -172,15 +207,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn spawn_grpc_connection_with_retry(
+    identity: Arc<Keypair>,
     grpc_parsed_url: Uri,
     tls_grpc_ca_cert: Option<String>,
     tls_grpc_client_key: Option<String>,
     tls_grpc_client_cert: Option<String>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
-) -> () {
+) {
     let mut retry = 0;
     loop {
         let retry_delay = match spawn_grpc_client(
+            identity.clone(),
             grpc_parsed_url.clone(),
             tls_grpc_ca_cert.clone(),
             tls_grpc_client_key.clone(),
@@ -245,7 +282,7 @@ fn read_grpc_urls_from_file(file_path: String) -> Result<Vec<String>, Error> {
                             if let Some(url) = x.as_str() {
                                 return url.to_string();
                             }
-                            return "".to_string();
+                            "".to_string()
                         })
                         .collect::<Vec<_>>();
 
@@ -269,13 +306,14 @@ fn read_grpc_urls_from_file(file_path: String) -> Result<Vec<String>, Error> {
             }
         }
     }
-    return Err(Error::new(
+    Err(Error::new(
         std::io::ErrorKind::Other,
         "No mtransaction_servers found",
-    ));
+    ))
 }
 
 async fn build_tasks(
+    identity: &Arc<Keypair>,
     grpc_urls: Vec<String>,
     params: &Params,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
@@ -291,6 +329,7 @@ async fn build_tasks(
         let tx_transactions = tx_transactions.clone();
 
         let tsk = tokio::spawn(spawn_grpc_connection_with_retry(
+            identity.clone(),
             grpc_parsed_url.clone(),
             tls_grpc_ca_cert.clone(),
             tls_grpc_client_key.clone(),
