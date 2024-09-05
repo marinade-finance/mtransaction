@@ -33,6 +33,7 @@ async fn tpu_ping(
             return;
         }
     };
+    // TODO ... replace with direct use `solana_quic_client::quic_client::QuicClient`
     let connection_cache = ConnectionCache::new_with_client_options(
         "default connection cache",
         2,
@@ -42,9 +43,11 @@ async fn tpu_ping(
     );
     let conn = connection_cache.get_nonblocking_connection(&tpu_addr);
     let t0 = time_us();
+    // sending nothing would only pre-warm the connection
+    // i am not sure yet if this is enough, so I am sending [0] instead
     if let Err(err) = conn.send_data(&[0]).await {
         error!("tpu_ping failed to measure rtt: {err}");
-        // return;
+        return;
     };
     let msg = RequestMessageEnvelope {
         rtt: Some(Rtt {
@@ -64,6 +67,7 @@ fn process_upstream_message(
     outbox: UnboundedSender<RequestMessageEnvelope>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
     identity: Arc<Keypair>,
+    redirect: Option<String>,
 ) {
     match response {
         Ok(envelope) => {
@@ -100,6 +104,7 @@ fn process_upstream_message(
                 }
             } else if let Some(tpus) = envelope.leader_tpus {
                 for tpu in tpus.tpu {
+                    let tpu = redirect.clone().unwrap_or(tpu);
                     tokio::spawn(tpu_ping(outbox.clone(), identity.clone(), tpu));
                 }
             }
@@ -116,6 +121,7 @@ async fn mtx_stream(
     client: &mut MTransactionClient<Channel>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
     mut metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
+    redirect: Option<String>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (tx_upstream_transactions, mut rx_upstream_transactions) =
         tokio::sync::mpsc::unbounded_channel::<RequestMessageEnvelope>();
@@ -144,7 +150,7 @@ async fn mtx_stream(
 
             response = response_stream.next() => {
                 if let Some(response) = response {
-                    process_upstream_message(source.clone(), response, tx_upstream_transactions.clone(), tx_transactions.clone(), identity.clone());
+                    process_upstream_message(source.clone(), response, tx_upstream_transactions.clone(), tx_transactions.clone(), identity.clone(), redirect.clone());
                 } else {
                     metrics.close();
                     error!("Upstream closed: {:?}", source);
@@ -195,6 +201,7 @@ pub async fn spawn_grpc_client(
     tls_grpc_client_cert: Option<String>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
     metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
+    redirect: Option<String>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;
@@ -221,6 +228,7 @@ pub async fn spawn_grpc_client(
         &mut client,
         tx_transactions,
         metrics,
+        redirect,
     )
     .await
     .map(|v| {

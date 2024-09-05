@@ -65,6 +65,9 @@ struct Params {
     #[structopt(long = "blackhole")]
     blackhole: bool,
 
+    #[structopt(long = "redirect")]
+    redirect: Option<String>,
+
     #[structopt(long = "throttle-parallel", default_value = "1000")]
     throttle_parallel: usize,
 }
@@ -140,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tpu_addr,
         params.rpc_url,
         params.blackhole,
+        params.redirect,
         params.throttle_parallel,
     );
 
@@ -213,6 +217,7 @@ async fn spawn_grpc_connection_with_retry(
     tls_grpc_client_key: Option<String>,
     tls_grpc_client_cert: Option<String>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
+    redirect: Option<String>,
 ) {
     let mut retry = 0;
     loop {
@@ -224,6 +229,7 @@ async fn spawn_grpc_connection_with_retry(
             tls_grpc_client_cert.clone(),
             tx_transactions.clone(),
             metrics::spawn_feeder(grpc_parsed_url.host().unwrap_or("unknown").to_string()),
+            redirect.clone(),
         )
         .await
         {
@@ -335,6 +341,7 @@ async fn build_tasks(
             tls_grpc_client_key.clone(),
             tls_grpc_client_cert.clone(),
             tx_transactions.clone(),
+            params.redirect.clone(),
         ));
 
         all_tasks.insert(i.clone(), tsk);

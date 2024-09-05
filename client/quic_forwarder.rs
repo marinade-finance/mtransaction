@@ -14,10 +14,16 @@ pub struct QuicForwarder {
     max_permits: usize,
     throttle_parallel: Arc<Semaphore>,
     connection_cache: Arc<ConnectionCache>,
+    redirect: Option<String>,
 }
 
 impl QuicForwarder {
-    pub fn new(identity: Option<Keypair>, tpu_addr: Option<IpAddr>, max_permits: usize) -> Self {
+    pub fn new(
+        identity: Option<Keypair>,
+        tpu_addr: Option<IpAddr>,
+        max_permits: usize,
+        redirect: Option<String>,
+    ) -> Self {
         let cert_info = if let (Some(identity), Some(tpu_addr)) = (&identity, tpu_addr) {
             Some((identity, tpu_addr))
         } else {
@@ -35,11 +41,18 @@ impl QuicForwarder {
             max_permits,
             throttle_parallel: Arc::new(Semaphore::new(max_permits)),
             connection_cache: Arc::new(connection_cache),
+            redirect,
         }
     }
 
     fn spawn_transaction_forwarder(&self, source: String, transaction: Transaction, tpu: &str) {
-        let tpu = tpu.to_owned();
+        let tpu = self
+            .redirect
+            .as_deref()
+            .unwrap_or(tpu)
+            .to_owned()
+            .parse()
+            .unwrap();
         let throttle_parallel = self.throttle_parallel.clone();
         let connection_cache = self.connection_cache.clone();
         let max_permits = self.max_permits;
@@ -49,7 +62,6 @@ impl QuicForwarder {
                 max_permits - throttle_parallel.available_permits(),
             );
 
-            let tpu = tpu.parse().unwrap();
             let wire_transaction = decode(transaction.data).unwrap();
 
             let throttle_permit = throttle_parallel.acquire_owned().await.unwrap();

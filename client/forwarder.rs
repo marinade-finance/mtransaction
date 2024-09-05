@@ -41,6 +41,7 @@ pub fn spawn_forwarder(
     tpu_addr: Option<IpAddr>,
     rpc_url: Option<String>,
     blackhole: bool,
+    redirect: Option<String>,
     throttle_parallel: usize,
 ) -> UnboundedSender<ForwardedTransaction> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ForwardedTransaction>();
@@ -58,7 +59,7 @@ pub fn spawn_forwarder(
     } else {
         tokio::spawn(forwarder_loop(
             rx,
-            QuicForwarder::new(identity, tpu_addr, throttle_parallel),
+            QuicForwarder::new(identity, tpu_addr, throttle_parallel, redirect),
         ));
     };
 
