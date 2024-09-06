@@ -24,6 +24,9 @@ $(JWT_KEY):
 cert-client:
 	./scripts/cert-client.bash $(cmd) $(validator)
 
+build-validator:
+	cargo build --features mock-validator --bin mock-validator
+
 build-server:
 	cargo build --bin mtx-server
 
@@ -36,7 +39,7 @@ build-client:
 build-client-release:
 	cargo build --bin mtx-client --release
 
-build-all: build-server build-client
+build-all: build-server build-client build-validator
 
 build-all-release: build-server-release build-client-release
 
@@ -45,7 +48,7 @@ clean:
 
 run-server: build-server
 	cargo run --bin mtx-server -- \
-		--stake-override-identity foo     bar \
+		--stake-override-identity leto     luna \
 		--stake-override-sol      1000000 2000000 \
 		--tls-grpc-server-cert    ./certs/localhost.cert \
 		--tls-grpc-server-key     ./certs/localhost.key \
@@ -54,7 +57,7 @@ run-server: build-server
 
 run-server-local: build-server
 	cargo run --bin mtx-server -- \
-		--stake-override-identity foo     bar \
+		--stake-override-identity leto     luna \
 		--stake-override-sol      1000000 2000000 \
 		--tls-grpc-server-cert    ./certs/localhost.cert \
 		--tls-grpc-server-key     ./certs/localhost.key \
@@ -90,3 +93,42 @@ run-client-blackhole: build-client
 		--tls-grpc-client-key  ./certs/client.$(client).key \
 		--tls-grpc-client-cert ./certs/client.$(client).cert \
 		--blackhole
+
+run-client-blackhole-2: build-client
+	cargo run --bin mtx-client -- \
+		--grpc-urls-file       ./client.yml \
+		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--tls-grpc-client-key  ./certs/client.$(client).key \
+		--tls-grpc-client-cert ./certs/client.$(client).cert \
+	 	--metrics-addr 127.0.0.1:9092 \
+		--blackhole
+
+run-client-blackhole-3: build-client
+	cargo run --bin mtx-client -- \
+		--grpc-urls-file       ./client.yml \
+		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--tls-grpc-client-key  ./certs/client.$(client).key \
+		--tls-grpc-client-cert ./certs/client.$(client).cert \
+	 	--metrics-addr 127.0.0.1:9093 \
+		--blackhole
+
+run-client-blackhole-4: build-client
+	cargo run --bin mtx-client -- \
+		--grpc-urls-file       ./client.yml \
+		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--tls-grpc-client-key  ./certs/client.$(client).key \
+		--tls-grpc-client-cert ./certs/client.$(client).cert \
+	 	--metrics-addr 127.0.0.1:9094 \
+		--blackhole
+
+run-client-local: build-client
+	cargo run --bin mtx-client -- \
+		--grpc-urls-file       ./client.yml \
+		--tls-grpc-ca-cert     ./certs/ca.cert \
+		--tls-grpc-client-key  ./certs/client.$(client).key \
+		--tls-grpc-client-cert ./certs/client.$(client).cert \
+	 	--metrics-addr 127.0.0.1:9094 \
+		--redirect 127.0.0.1:49876
+
+run-validator-local:
+	cargo run --features mock-validator --bin mock-validator

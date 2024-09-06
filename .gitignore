@@ -9,3 +9,4 @@ certs/*.srl
 certs/*.pub
 .env
 .sw?
+*~

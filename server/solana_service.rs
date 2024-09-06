@@ -1,4 +1,4 @@
-use crate::{metrics, rpc_server::Mode, json_str};
+use crate::{json_str, metrics, rpc_server::Mode, Balancer};
 use crate::{LEADER_REFRESH_SECONDS, N_LEADERS};
 use eyre::bail;
 use eyre::Result;
@@ -18,8 +18,9 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::RwLock;
+use tokio_stream::StreamExt;
 
 const SLOTS_PER_EPOCH: u64 = 432000;
 
@@ -61,8 +62,7 @@ pub fn get_leader_schedule(
 
     Ok(leader_schedule
         .iter()
-        .map(|(identity, slots)| slots.iter().map(|slot| (*slot as u64, identity.clone())))
-        .flatten()
+        .flat_map(|(identity, slots)| slots.iter().map(|slot| (*slot as u64, identity.clone())))
         .collect())
 }
 
@@ -73,9 +73,9 @@ pub fn get_tpu_by_identity(
 
     Ok(nodes
         .iter()
-        .flat_map(|node| match node.tpu_quic {
-            Some(tpu) => Some((node.pubkey.clone(), tpu.to_string())),
-            _ => None,
+        .flat_map(|node| {
+            node.tpu_quic
+                .map(|tpu| (node.pubkey.clone(), tpu.to_string()))
         })
         .collect())
 }
@@ -106,8 +106,7 @@ pub fn leaders_stream(
                 Some(slot_info) = slot_notifications.next() => {
                     let current_leaders: HashSet<_> = (0..N_LEADERS)
                         .map(|nth_leader| nth_leader * 4 + (slot_info.slot % SLOTS_PER_EPOCH))
-                        .map(|slot| schedule.get(&slot))
-                        .flatten()
+                        .filter_map(|slot| schedule.get(&slot))
                         .cloned()
                         .collect();
                     debug!("Slot: {:?}, {:?}", slot_info, &current_leaders);
@@ -140,17 +139,15 @@ pub struct SignatureRecord {
     pub signature: Signature,
     pub mode: Mode,
     pub consumers: Vec<String>,
-    pub tpu_ips: HashSet<String>,
+    pub tpu_ips: Vec<String>,
     pub partner_name: String,
 }
 
-pub fn spawn_tx_signature_watcher(
+pub async fn tx_signature_watcher_loop(
+    mut rx: UnboundedReceiver<SignatureRecord>,
     client: Arc<RpcClient>,
-) -> Result<UnboundedSender<SignatureRecord>, Box<dyn Error + Send + Sync>> {
-    let (tx_signature, rx_signature) = unbounded_channel::<SignatureRecord>();
-
-    let mut rx_signature = UnboundedReceiverStream::new(rx_signature);
-
+    balancer: Arc<RwLock<Balancer>>,
+) {
     let mut bundle_subscriptions_signal = Box::pin(
         tokio_stream::iter(std::iter::repeat(())).throttle(tokio::time::Duration::from_secs(1)),
     );
@@ -158,46 +155,40 @@ pub fn spawn_tx_signature_watcher(
     let signature_check_after = tokio::time::Duration::from_secs(10);
     let max_bundle_size = 250;
 
-    tokio::spawn(async move {
-        let mut signature_queue: VecDeque<SignatureRecord> = Default::default();
+    let mut signature_queue: VecDeque<SignatureRecord> = Default::default();
 
-        loop {
-            tokio::select! {
-                _ = bundle_subscriptions_signal.next() => {
-                    loop {
-                        let mut to_be_bundled_count = 0;
-                        for record in signature_queue.iter() {
-                            if record.created_at.elapsed() > signature_check_after && to_be_bundled_count < max_bundle_size {
-                                to_be_bundled_count += 1;
-                            } else {
-                                break;
-                            }
-                        }
-                        if to_be_bundled_count == 0 {
+    loop {
+        tokio::select! {
+            _ = bundle_subscriptions_signal.next() => {
+                loop {
+                    let mut to_be_bundled_count = 0;
+                    for record in signature_queue.iter() {
+                        if record.created_at.elapsed() > signature_check_after && to_be_bundled_count < max_bundle_size {
+                            to_be_bundled_count += 1;
+                        } else {
                             break;
                         }
-                        {
-                            let bundle: Vec<_> = signature_queue.drain(0..to_be_bundled_count).collect();
-
-                            tokio::spawn(signature_checker(client.clone(), bundle));
-                        }
                     }
-                },
-                Some(mut record) = rx_signature.next() => {
-                    record.created_at = tokio::time::Instant::now();
-                    let span = record.span.clone();
-                    let _span = span.enter();
-                    info!("Will watch for {}", record.signature);
-                    signature_queue.push_back(record);
-                },
-                else => break,
-            }
+                    if to_be_bundled_count == 0 {
+                        break;
+                    }
+                    {
+                        let bundle: Vec<_> = signature_queue.drain(0..to_be_bundled_count).collect();
+
+                        tokio::spawn(signature_checker(client.clone(), balancer.clone(), bundle));
+                    }
+                }
+            },
+            Some(mut record) = rx.recv() => {
+                record.created_at = tokio::time::Instant::now();
+                let span = record.span.clone();
+                let _span = span.enter();
+                info!("Will watch for {}", record.signature);
+                signature_queue.push_back(record);
+            },
+            else => break,
         }
-
-        Ok::<_, Box<dyn Error + Send + Sync>>(())
-    });
-
-    Ok(tx_signature)
+    }
 }
 
 fn format_status(status: &TransactionStatus) -> String {
@@ -213,13 +204,17 @@ fn format_status(status: &TransactionStatus) -> String {
     format!("\"slot\":{slot},\"confirmations\":{confirmations},\"status\":\"{status}\"")
 }
 
-async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>) {
-    match client.get_signature_statuses(&bundle.iter().map(|f| f.signature).collect::<Vec<_>>())
-    {
+async fn signature_checker(
+    client: Arc<RpcClient>,
+    balancer: Arc<RwLock<Balancer>>,
+    bundle: Vec<SignatureRecord>,
+) {
+    match client.get_signature_statuses(&bundle.iter().map(|f| f.signature).collect::<Vec<_>>()) {
         Ok(response) => {
             for (record, signature_status) in bundle.iter().zip(response.value.iter()) {
                 let span = record.span.clone();
                 let _span = span.enter();
+                let mut success = false;
                 if let Some(known_status) = signature_status {
                     info!(
                         "new signature status # {{{},\"rtime\":{},\"clients\":{},\"tpu_ips\":{}}}",
@@ -230,16 +225,10 @@ async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>)
                     );
                     match known_status.err {
                         Some(_) => metrics::CHAIN_TX_EXECUTION_SUCCESS
-                            .with_label_values(&[
-                                &record.partner_name,
-                                &record.mode.to_string(),
-                            ])
+                            .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                             .inc(),
-                        _ => metrics::CHAIN_TX_EXECUTION_SUCCESS
-                            .with_label_values(&[
-                                &record.partner_name,
-                                &record.mode.to_string(),
-                            ])
+                        _ => metrics::CHAIN_TX_EXECUTION_ERROR
+                            .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                             .inc(),
                     };
                     metrics::CHAIN_TX_FINALIZED
@@ -247,27 +236,24 @@ async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>)
                         .inc();
                     for consumer in &record.consumers {
                         metrics::CHAIN_TX_FINALIZED_BY_CONSUMER
-                            .with_label_values(&[&consumer])
+                            .with_label_values(&[consumer])
                             .inc();
                     }
                     for tpu_ip in &record.tpu_ips {
                         metrics::CHAIN_TX_FINALIZED_BY_TPU_IP
-                            .with_label_values(&[&tpu_ip])
+                            .with_label_values(&[tpu_ip])
                             .inc();
                     }
+                    success = true;
                 } else {
                     metrics::CHAIN_TX_TIMEOUT
                         .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                         .inc();
-                    for consumer in &record.consumers {
-                        metrics::CHAIN_TX_TIMEOUT_BY_CONSUMER
-                            .with_label_values(&[&consumer])
-                            .inc();
-                    }
+                };
+                let mut lock = balancer.write().await;
+                for consumer in &record.consumers {
                     for tpu_ip in &record.tpu_ips {
-                        metrics::CHAIN_TX_TIMEOUT_BY_TPU_IP
-                            .with_label_values(&[&tpu_ip])
-                            .inc();
+                        lock.update_success(consumer, tpu_ip, success);
                     }
                 }
             }
@@ -370,7 +356,7 @@ fn merge_validator_records(
 ) -> HashMap<String, LeaderInfo> {
     let mut result: HashMap<String, LeaderInfo> = HashMap::default();
     for (identity, tpu) in tpus.into_iter() {
-        validator_records.get(&identity).map(|record| {
+        if let Some(record) = validator_records.get(&identity) {
             let is_jito = jito_identities.get(&record.vote_account).is_some();
             let info = LeaderInfo {
                 identity: identity.clone(),
@@ -379,7 +365,7 @@ fn merge_validator_records(
                 is_jito,
             };
             result.insert(identity, info);
-        });
+        }
     }
     result
 }

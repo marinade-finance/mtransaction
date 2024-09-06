@@ -1,6 +1,6 @@
-use crate::forwarder::Forwarder;
+use crate::forwarder::{ForwardedTransaction, Forwarder};
 use crate::grpc_client::pb::Transaction;
-use crate::metrics;
+use crate::{metrics, perf_counter_ns, time_ms};
 use base64::decode;
 use log::{error, info};
 use solana_client::{
@@ -14,10 +14,16 @@ pub struct QuicForwarder {
     max_permits: usize,
     throttle_parallel: Arc<Semaphore>,
     connection_cache: Arc<ConnectionCache>,
+    redirect: Option<String>,
 }
 
 impl QuicForwarder {
-    pub fn new(identity: Option<Keypair>, tpu_addr: Option<IpAddr>, max_permits: usize) -> Self {
+    pub fn new(
+        identity: Option<Keypair>,
+        tpu_addr: Option<IpAddr>,
+        max_permits: usize,
+        redirect: Option<String>,
+    ) -> Self {
         let cert_info = if let (Some(identity), Some(tpu_addr)) = (&identity, tpu_addr) {
             Some((identity, tpu_addr))
         } else {
@@ -35,11 +41,18 @@ impl QuicForwarder {
             max_permits,
             throttle_parallel: Arc::new(Semaphore::new(max_permits)),
             connection_cache: Arc::new(connection_cache),
+            redirect,
         }
     }
 
-    fn spawn_transaction_forwarder(&self, source: String, transaction: Transaction, tpu: &String) {
-        let tpu = tpu.clone();
+    fn spawn_transaction_forwarder(&self, source: String, transaction: Transaction, tpu: &str) {
+        let tpu = self
+            .redirect
+            .as_deref()
+            .unwrap_or(tpu)
+            .to_owned()
+            .parse()
+            .unwrap();
         let throttle_parallel = self.throttle_parallel.clone();
         let connection_cache = self.connection_cache.clone();
         let max_permits = self.max_permits;
@@ -49,14 +62,18 @@ impl QuicForwarder {
                 max_permits - throttle_parallel.available_permits(),
             );
 
-            let tpu = tpu.parse().unwrap();
             let wire_transaction = decode(transaction.data).unwrap();
 
             let throttle_permit = throttle_parallel.acquire_owned().await.unwrap();
 
             info!("Tx {} -> {}", transaction.signature, &tpu);
             let conn = connection_cache.get_nonblocking_connection(&tpu);
+            let start = perf_counter_ns();
             let request_result = conn.send_data(&wire_transaction).await;
+            let took = (start - perf_counter_ns()) / 1000;
+            metrics::TX_FORWARD_LATENCY
+                .with_label_values(&[&tpu.ip().to_string()])
+                .add(took.try_into().unwrap_or(0));
             Self::handle_send_result(source, request_result);
 
             drop(throttle_permit);
@@ -78,10 +95,15 @@ impl QuicForwarder {
 }
 
 impl Forwarder for QuicForwarder {
-    fn process(&self, source: String, transaction: Transaction) {
+    fn process(&self, tx: ForwardedTransaction) {
+        let source = tx.source;
+        let transaction = tx.transaction;
         metrics::TX_RECEIVED_COUNT
             .with_label_values(&[source.as_str()])
             .inc();
+        metrics::TX_RECEIVED_LATENCY
+            .with_label_values(&[source.as_str()])
+            .add((time_ms().max(tx.ctime) - tx.ctime).try_into().unwrap_or(0));
         for tpu in transaction.tpu.iter() {
             self.spawn_transaction_forwarder(source.clone(), transaction.clone(), tpu);
         }

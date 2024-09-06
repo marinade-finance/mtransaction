@@ -15,12 +15,12 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::{panic, process};
 use structopt::StructOpt;
+use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::RwLock;
 use tracing_log::LogTracer;
 
 pub const N_COPIES: usize = 2;
 pub const N_LEADERS: u64 = 7;
-pub const N_CONSUMERS: usize = 3;
 pub const LEADER_REFRESH_SECONDS: u64 = 3600;
 pub const NODES_REFRESH_SECONDS: u64 = 60;
 pub const GOSSIP_ENTRYPOINT: &str = "entrypoint3.mainnet-beta.solana.com:8001";
@@ -84,6 +84,14 @@ pub fn time_ms() -> u64 {
         .as_millis() as u64
 }
 
+#[inline]
+pub fn time_us() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as u64
+}
+
 #[macro_export]
 macro_rules! json_str {
     (
@@ -124,10 +132,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let params = Params::from_args();
 
     setup_tracing(params.debug.unwrap_or(false));
- 
+
     let client = Arc::new(solana_client(params.rpc_url, params.rpc_commitment));
-    let tx_signatures = spawn_tx_signature_watcher(client.clone()).unwrap();
+    let (tx_signatures, rx_signature) = unbounded_channel::<SignatureRecord>();
     let balancer = Arc::new(RwLock::new(Balancer::new(tx_signatures)));
+    tokio::spawn(tx_signature_watcher_loop(
+        rx_signature,
+        client.clone(),
+        balancer.clone(),
+    ));
     let pubsub_client = Arc::new(PubsubClient::new(&params.ws_rpc_url).await?);
     balancer_updater(balancer.clone(), client.clone(), pubsub_client.clone());
     metrics::spawn(params.metrics_addr.parse().unwrap());

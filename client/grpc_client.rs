@@ -2,11 +2,17 @@ pub mod pb {
     tonic::include_proto!("validator");
 }
 use crate::forwarder::ForwardedTransaction;
+use crate::time_us;
 use log::{error, info, warn};
 use pb::{
-    m_transaction_client::MTransactionClient, Ping, Pong, RequestMessageEnvelope,
-    ResponseMessageEnvelope,
+    m_transaction_client::MTransactionClient, Pong, RequestMessageEnvelope,
+    ResponseMessageEnvelope, Rtt, Transaction,
 };
+use solana_client::connection_cache::ConnectionCache;
+use solana_client::nonblocking::tpu_connection::TpuConnection;
+use solana_sdk::signature::Keypair;
+use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_stream::StreamExt;
 use tonic::{
@@ -14,44 +20,93 @@ use tonic::{
     Status,
 };
 
-fn process_ping(ping: Ping, tx_upstream_transactions: UnboundedSender<RequestMessageEnvelope>) {
-    info!("Sending pong: {}", ping.id);
-    if let Err(err) = tx_upstream_transactions.send(RequestMessageEnvelope {
-        pong: Some(Pong { id: ping.id }),
-        ..Default::default()
-    }) {
-        error!("Failed to enqueue pong: {}", err);
-    }
-}
-
-fn process_transaction(
-    transaction: ForwardedTransaction,
-    tx_transactions: UnboundedSender<ForwardedTransaction>,
+async fn tpu_ping(
+    outbox: UnboundedSender<RequestMessageEnvelope>,
+    identity: Arc<Keypair>,
+    tpu: String,
 ) {
-    if let Err(err) = tx_transactions.send(transaction) {
-        error!("Failed to enqueue tx: {}", err);
+    info!("tpu_ping spawn ping to {tpu}");
+    let tpu_addr: SocketAddr = match tpu.parse() {
+        Ok(value) => value,
+        Err(err) => {
+            error!("tpu_ping failed to parse tpu into SocketAddr: {err}");
+            return;
+        }
+    };
+    // TODO ... replace with direct use `solana_quic_client::quic_client::QuicClient`
+    let connection_cache = ConnectionCache::new_with_client_options(
+        "default connection cache",
+        2,
+        None,
+        Some((&identity, tpu_addr.ip())),
+        None,
+    );
+    let conn = connection_cache.get_nonblocking_connection(&tpu_addr);
+    let t0 = time_us();
+    // sending nothing would only pre-warm the connection
+    // i am not sure yet if this is enough, so I am sending [0] instead
+    if let Err(err) = conn.send_data(&[0]).await {
+        error!("tpu_ping failed to measure rtt: {err}");
+        return;
+    };
+    let msg = RequestMessageEnvelope {
+        rtt: Some(Rtt {
+            ip: tpu.split(':').next().unwrap_or("").to_string(),
+            rtt: time_us() - t0,
+        }),
+        ..Default::default()
+    };
+    if let Err(err) = outbox.send(msg) {
+        error!("tpu_ping failed to send rtt stats: {err}");
     }
 }
 
 fn process_upstream_message(
     source: String,
     response: Result<ResponseMessageEnvelope, Status>,
-    tx_upstream_transactions: UnboundedSender<RequestMessageEnvelope>,
+    outbox: UnboundedSender<RequestMessageEnvelope>,
     tx_transactions: UnboundedSender<ForwardedTransaction>,
+    identity: Arc<Keypair>,
+    redirect: Option<String>,
 ) {
     match response {
-        Ok(response_message_envelope) => {
-            if let Some(ping) = response_message_envelope.ping {
-                process_ping(ping, tx_upstream_transactions);
-            }
-            if let Some(transaction) = response_message_envelope.transaction {
-                process_transaction(
-                    ForwardedTransaction {
-                        source: source,
-                        transaction: transaction,
+        Ok(envelope) => {
+            if let Some(ping) = envelope.ping {
+                info!("Sending pong: {}", ping.id);
+                let msg = RequestMessageEnvelope {
+                    pong: Some(Pong { id: ping.id }),
+                    ..Default::default()
+                };
+                if let Err(err) = outbox.send(msg) {
+                    error!("Failed to enqueue pong: {}", err);
+                }
+            } else if let Some(transaction) = envelope.transaction {
+                let tx = ForwardedTransaction {
+                    ctime: 0,
+                    source,
+                    transaction,
+                };
+                if let Err(err) = tx_transactions.send(tx) {
+                    error!("Failed to enqueue tx: {}", err);
+                }
+            } else if let Some(transaction) = envelope.timed_transaction {
+                let tx = ForwardedTransaction {
+                    ctime: transaction.ctime,
+                    source,
+                    transaction: Transaction {
+                        signature: transaction.signature,
+                        data: transaction.data,
+                        tpu: transaction.tpu,
                     },
-                    tx_transactions,
-                );
+                };
+                if let Err(err) = tx_transactions.send(tx) {
+                    error!("Failed to enqueue tx: {}", err);
+                }
+            } else if let Some(tpus) = envelope.leader_tpus {
+                for tpu in tpus.tpu {
+                    let tpu = redirect.clone().unwrap_or(tpu);
+                    tokio::spawn(tpu_ping(outbox.clone(), identity.clone(), tpu));
+                }
             }
         }
         Err(err) => {
@@ -62,9 +117,11 @@ fn process_upstream_message(
 
 async fn mtx_stream(
     source: String,
+    identity: Arc<Keypair>,
     client: &mut MTransactionClient<Channel>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
     mut metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
+    redirect: Option<String>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     let (tx_upstream_transactions, mut rx_upstream_transactions) =
         tokio::sync::mpsc::unbounded_channel::<RequestMessageEnvelope>();
@@ -93,7 +150,7 @@ async fn mtx_stream(
 
             response = response_stream.next() => {
                 if let Some(response) = response {
-                    process_upstream_message(source.clone(), response, tx_upstream_transactions.clone(), tx_transactions.clone());
+                    process_upstream_message(source.clone(), response, tx_upstream_transactions.clone(), tx_transactions.clone(), identity.clone(), redirect.clone());
                 } else {
                     metrics.close();
                     error!("Upstream closed: {:?}", source);
@@ -137,12 +194,14 @@ async fn get_tls_config(
 }
 
 pub async fn spawn_grpc_client(
+    identity: Arc<Keypair>,
     grpc_url: Uri,
     tls_grpc_ca_cert: Option<String>,
     tls_grpc_client_key: Option<String>,
     tls_grpc_client_cert: Option<String>,
     tx_transactions: tokio::sync::mpsc::UnboundedSender<ForwardedTransaction>,
     metrics: tokio::sync::mpsc::Receiver<RequestMessageEnvelope>,
+    redirect: Option<String>,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
     info!("Loading TLS configuration.");
     let tls = get_tls_config(tls_grpc_ca_cert, tls_grpc_client_key, tls_grpc_client_cert).await?;
@@ -165,9 +224,11 @@ pub async fn spawn_grpc_client(
 
     mtx_stream(
         grpc_host.unwrap_or("unknown").to_string(),
+        identity,
         &mut client,
         tx_transactions,
         metrics,
+        redirect,
     )
     .await
     .map(|v| {
