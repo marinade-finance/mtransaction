@@ -146,7 +146,7 @@ const run = async () => {
 
   const authToken = await authenticate(user)
 
-  const { blockhash: recentBlockhash } = await cluster.getRecentBlockhash()
+  const { blockhash: recentBlockhash } = await cluster.getLatestBlockhash()
 
   const MAX_PARALLEL_REQUESTS = 16
   let parallelRequests = 0
@@ -193,7 +193,7 @@ const fund = async (cluster) => {
   const rent = 890880 // 2439
   const totalCost = transferSum + signatureCostSum + rent
 
-  const { blockhash: recentBlockhash } = await cluster.getRecentBlockhash()
+  const { blockhash: recentBlockhash } = await cluster.getLatestBlockhash()
 
   const tx = new web3.Transaction({
     recentBlockhash
