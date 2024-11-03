@@ -140,7 +140,7 @@ pub struct SignatureRecord {
     pub signature: Signature,
     pub mode: Mode,
     pub consumers: Vec<String>,
-    pub tpu_ips: HashSet<String>,
+    pub tpu_ips: Vec<String>,
     pub partner_name: String,
 }
 
@@ -259,16 +259,6 @@ async fn signature_checker(client: Arc<RpcClient>, bundle: Vec<SignatureRecord>)
                     metrics::CHAIN_TX_TIMEOUT
                         .with_label_values(&[&record.partner_name, &record.mode.to_string()])
                         .inc();
-                    for consumer in &record.consumers {
-                        metrics::CHAIN_TX_TIMEOUT_BY_CONSUMER
-                            .with_label_values(&[&consumer])
-                            .inc();
-                    }
-                    for tpu_ip in &record.tpu_ips {
-                        metrics::CHAIN_TX_TIMEOUT_BY_TPU_IP
-                            .with_label_values(&[&tpu_ip])
-                            .inc();
-                    }
                 }
             }
         }

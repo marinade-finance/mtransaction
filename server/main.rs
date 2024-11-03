@@ -20,7 +20,6 @@ use tracing_log::LogTracer;
 
 pub const N_COPIES: usize = 2;
 pub const N_LEADERS: u64 = 7;
-pub const N_CONSUMERS: usize = 3;
 pub const LEADER_REFRESH_SECONDS: u64 = 3600;
 pub const NODES_REFRESH_SECONDS: u64 = 60;
 pub const GOSSIP_ENTRYPOINT: &str = "entrypoint3.mainnet-beta.solana.com:8001";
